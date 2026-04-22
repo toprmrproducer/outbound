@@ -19,9 +19,9 @@ A **production-grade AI outbound voice calling platform** that:
 - Full-stack dashboard: single call, batch CSV, campaigns, AI prompt editor, appointments, call logs, CRM, settings (BYOK), live logs
 - Persists everything to **Supabase** (zero local SQLite)
 
-**Active model:** `gemini-2.0-flash-live-001` — cheapest stable Gemini Live model  
-**Cost:** ≈ ₹1.21/min total (Vobiz ₹1.00 + LiveKit ₹0.17 + Gemini ₹0.03 + Deepgram TTS ₹0.01/call)  
-**Stack:** Python 3.11+ · LiveKit Agents 1.x · Gemini Live · Vobiz SIP · FastAPI · Supabase · APScheduler · Cal.com API v1 · vanilla HTML/JS dashboard
+**Active model:** `gemini-3.1-flash-live-preview` — best quality, connects reliably on v1alpha API  
+**Cost:** ≈ ₹1.21/min total (Vobiz ₹1.00 + LiveKit ₹0.17 + Gemini ₹0.03/min)  
+**Stack:** Python 3.14 · LiveKit Agents 1.x · Gemini Live · Vobiz SIP · FastAPI · Supabase · APScheduler · Cal.com API v1 · vanilla HTML/JS dashboard
 
 ---
 
@@ -215,7 +215,8 @@ realtime_kwargs = dict(
     # 3. VAD tuning: less aggressive end-of-speech detection
     realtime_input_config=gt.RealtimeInputConfig(
         automatic_activity_detection=gt.AutomaticActivityDetection(
-            end_of_speech_sensitivity=gt.EndSensitivity.LOW,
+            # ⚠️ GOTCHA: use END_SENSITIVITY_LOW not .LOW — full string enum required
+            end_of_speech_sensitivity=gt.EndSensitivity.END_SENSITIVITY_LOW,
             silence_duration_ms=2000,
             prefix_padding_ms=200,
         ),
@@ -232,25 +233,26 @@ Root causes the above fixes:
 
 ## 6. Gemini 3.1 Special Handling
 
-`generate_reply()` is silently ignored for `gemini-3.1-*` models (LiveKit plugin hasn't implemented it). Detection by model name:
+`generate_reply()` is **silently ignored** for `gemini-3.1-*` models — the LiveKit plugin explicitly warns:  
+`"generate_reply is not compatible with 'gemini-3.1-flash-live-preview' and will be ignored."`
+
+**The 3.1 model speaks autonomously.** It listens to the audio stream and responds on its own without `generate_reply()`. The system prompt must instruct it to greet immediately on connect — the model picks up the call and speaks first based on its instructions.
 
 ```python
-_use_say = "3.1" in os.getenv("GEMINI_MODEL", "")
-if _use_say:
-    await session.say("Hello! Am I speaking with {lead_name}?...")
-else:
+# Do NOT use session.say() with a separate TTS — that path fails silently on SIP legs.
+# Do NOT use generate_reply() — it's a no-op for 3.1.
+# Just write the system prompt to open the conversation immediately.
+# The model speaks as soon as audio starts flowing.
+try:
     await session.generate_reply(instructions="Greet the lead...")
+except Exception as e:
+    pass  # harmless for 3.1 — model speaks from system prompt anyway
 ```
 
-`session.say()` requires a TTS model. For 3.1, attach **Deepgram TTS** (not Google TTS — Google TTS needs ADC service account, not Gemini API key):
-
-```python
-if "3.1" in gemini_model:
-    from livekit.plugins import deepgram as _dg
-    extra_tts = _dg.TTS()   # reads DEEPGRAM_API_KEY from env
-```
-
-**Model availability:** Only models with `bidiGenerateContent` in their supported methods work for Gemini Live. Check via: `GET https://generativelanguage.googleapis.com/v1beta/models?key=...`. As of 2026-04, no "lite" model supports `bidiGenerateContent`. The cheapest Live model is `gemini-2.0-flash-live-001`.
+**Model availability:** Only models with `bidiGenerateContent` in their supported methods work for Gemini Live. As of 2026-04:
+- `gemini-3.1-flash-live-preview` → works on **v1alpha** API (default)
+- `gemini-2.0-flash-live-001` → **NOT accessible** on v1alpha or v1beta for standard API keys
+- No "lite" model supports `bidiGenerateContent`
 
 ---
 
@@ -258,13 +260,13 @@ if "3.1" in gemini_model:
 
 | Model | Supports Live | Cost | Notes |
 |---|---|---|---|
-| `gemini-2.0-flash-live-001` | ✅ | Cheapest | Stable GA, recommended default |
-| `gemini-2.5-flash-native-audio-latest` | ✅ | Mid | Latest 2.5, good quality |
-| `gemini-3.1-flash-live-preview` | ✅ | Preview (free) | Best quality, needs Deepgram TTS for greeting |
-| `gemini-3.1-flash-lite-preview` | ❌ | — | Does NOT support Live WebSocket |
+| `gemini-3.1-flash-live-preview` | ✅ | Preview | **Recommended** — connects reliably on v1alpha; best voice quality |
+| `gemini-2.5-flash-native-audio-preview-12-2025` | ✅ | Mid | Alternative 2.5 native audio model |
+| `gemini-2.0-flash-live-001` | ⚠️ | Cheapest | GA model BUT inaccessible on standard API keys (1008 error on both v1alpha and v1beta) |
+| `gemini-3.1-flash-lite-preview` | ❌ | — | Does NOT support Live WebSocket (`bidiGenerateContent`) |
 | `gemini-2.5-flash-lite` | ❌ | — | Does NOT support Live WebSocket |
 
-**Cost to reach ₹1–1.50/min:** Already achieved. Gemini Live cost is negligible (₹0.03/min). The floor is Vobiz SIP at ₹1.00/min + LiveKit ₹0.17/min = ₹1.17/min fixed. No lite model exists for Live audio to reduce further.
+**Cost to reach ₹1–1.50/min:** Already achieved at ₹1.21/min. The floor is Vobiz SIP ₹1.00 + LiveKit ₹0.17 = ₹1.17/min fixed. Gemini 3.1 preview is free tier so Gemini cost ≈ ₹0/min in practice.
 
 ---
 
@@ -426,13 +428,17 @@ Agent name **must match** the `agent_name` in `create_dispatch()` calls from the
 
 | Symptom | Root Cause | Fix |
 |---|---|---|
-| Agent goes silent 1–2 min into call | Context window full OR session timeout OR VAD too aggressive | Apply Section 5 configs |
-| `generate_reply` ignored, no greeting | Using gemini-3.1-* model | Detect `"3.1" in model` → use `session.say()` + Deepgram TTS |
+| Agent goes silent 30s–2 min into call | Silence configs broken — `EndSensitivity.LOW` is wrong enum | Use `EndSensitivity.END_SENSITIVITY_LOW` (full string form required) |
+| All silence-prevention configs silently skipped | Exception in try/except hides the enum error | Check for "Could not build silence-prevention config" in logs |
+| `generate_reply` ignored, no initial greeting | Using gemini-3.1-* model — plugin explicitly blocks it | 3.1 speaks autonomously from system prompt; no workaround needed |
+| `session.say()` + Deepgram TTS produces no audio | TTS audio doesn't route through SIP leg properly | Remove Deepgram TTS workaround — model speaks without it |
+| `gemini-2.0-flash-live-001` → 1008 policy violation | Model inaccessible on standard API keys (v1alpha + v1beta both fail) | Use `gemini-3.1-flash-live-preview` instead |
 | `AgentSession isn't running` | Session started before SIP call answered | Dial-first pattern (Section 4) |
-| `DefaultCredentialsError` on TTS | Used `google.TTS` which needs ADC, not Gemini API key | Use `deepgram.TTS()` for 3.1 |
+| `DefaultCredentialsError` on TTS | Used `google.TTS` which needs ADC, not Gemini API key | Don't attach any extra TTS for realtime models |
 | `duplicate function name` on tools | Passed tools to both `super().__init__()` and `AgentSession` | Pass `tools=[]` to `super().__init__()`, pass to `AgentSession` only |
-| Port conflict on startup | Hosting env sets `$PORT` but LiveKit agent binds 8081 | Hardcode `--port 8000` in start.sh |
-| Lite model not working for live audio | e.g. gemini-3.1-flash-lite-preview lacks `bidiGenerateContent` | Use `gemini-2.0-flash-live-001` |
+| Port 8081 already in use on restart | Previous worker not fully killed | `pkill -9 -f "agent.py start"` then wait 2s before restart |
+| Worker uses old model after DB change | `load_db_settings_to_env()` only runs at startup | Must restart agent worker after changing model in Settings |
+| Lite model not working for live audio | e.g. gemini-3.1-flash-lite-preview lacks `bidiGenerateContent` | Use `gemini-3.1-flash-live-preview` |
 
 ---
 

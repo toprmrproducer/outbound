@@ -175,23 +175,13 @@ def _build_session(tools: list, system_prompt: str) -> AgentSession:
         logger.info(
             "SESSION MODE: Gemini Live realtime (%s, voice=%s)", gemini_model, gemini_voice
         )
-        # Gemini 3.1 Live doesn't support generate_reply — attach Deepgram TTS
-        # so session.say() works for the scripted opening line.
-        extra_tts = None
-        if "3.1" in gemini_model and _deepgram_stt:
-            try:
-                from livekit.plugins import deepgram as _dg
-                extra_tts = _dg.TTS()
-                logger.info("Deepgram TTS attached for Gemini 3.1 initial greeting")
-            except Exception as _e:
-                logger.warning("Could not load Deepgram TTS: %s", _e)
-
         # Build silence-prevention configs
+        # NOTE: EndSensitivity uses full string values e.g. "END_SENSITIVITY_LOW", not .LOW
         try:
             from google.genai import types as _gt
             _realtime_input_cfg = _gt.RealtimeInputConfig(
                 automatic_activity_detection=_gt.AutomaticActivityDetection(
-                    end_of_speech_sensitivity=_gt.EndSensitivity.LOW,
+                    end_of_speech_sensitivity=_gt.EndSensitivity.END_SENSITIVITY_LOW,
                     silence_duration_ms=2000,   # 2 s silence before ending turn
                     prefix_padding_ms=200,
                 ),
@@ -220,7 +210,6 @@ def _build_session(tools: list, system_prompt: str) -> AgentSession:
 
         return AgentSession(
             llm=RealtimeClass(**realtime_kwargs),
-            tts=extra_tts,
             tools=tools,
         )
 
@@ -404,34 +393,18 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 await _log("warning", f"Recording start failed (non-fatal): {_exc}")
 
     # ------------------------------------------------------------------
-    # Greet — gemini-3.1-flash-live silently ignores generate_reply
-    # (the livekit plugin hasn't implemented it yet).  We detect this
-    # by model name and call session.say() with a scripted line instead.
+    # Greet — trigger the model to speak first
     # ------------------------------------------------------------------
-    _model_for_greeting = os.getenv("GEMINI_MODEL", "")
-    _use_say = "3.1" in _model_for_greeting  # 3.1 Live doesn't support generate_reply
-
-    if _use_say:
-        await _log("info", "Using say() for initial greeting (3.1 model)")
-        try:
-            await session.say(
-                f"Hello! Am I speaking with {lead_name}? "
-                f"This is Priya calling from {business_name}. "
-                f"I'm reaching out about {service_type}. Do you have a moment?"
-            )
-        except Exception as _say_exc:
-            await _log("warning", f"say() failed: {_say_exc}")
-    else:
-        greeting_instructions = (
-            f"The call just connected. Greet the lead and ask if you're speaking "
-            f"with {lead_name}, as per your instructions."
-            if phone_number
-            else "Greet the caller warmly."
-        )
-        try:
-            await session.generate_reply(instructions=greeting_instructions)
-        except Exception as _gr_exc:
-            await _log("warning", f"generate_reply failed: {_gr_exc}")
+    greeting_instructions = (
+        f"The call just connected. Greet the lead and ask if you're speaking "
+        f"with {lead_name}, as per your instructions."
+        if phone_number
+        else "Greet the caller warmly."
+    )
+    try:
+        await session.generate_reply(instructions=greeting_instructions)
+    except Exception as _gr_exc:
+        await _log("warning", f"generate_reply failed: {_gr_exc}")
 
 
 # ---------------------------------------------------------------------------
