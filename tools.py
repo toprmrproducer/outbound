@@ -27,12 +27,29 @@ class AppointmentTools(llm.ToolContext):
         phone_number: Optional[str] = None,
         lead_name: Optional[str] = None,
     ):
-        super().__init__()
+        # Set instance attrs before calling super so bound methods are ready
         self.ctx = ctx
         self.phone_number = phone_number
         self.lead_name = lead_name
         self._call_start_time = time.time()
         self._sip_domain = os.getenv("VOBIZ_SIP_DOMAIN", "")
+        super().__init__(tools=[
+            self.check_availability,
+            self.book_appointment,
+            self.end_call,
+            self.transfer_to_human,
+            self.send_sms_confirmation,
+        ])
+
+    @property
+    def all_tools(self) -> list:
+        return [
+            self.check_availability,
+            self.book_appointment,
+            self.end_call,
+            self.transfer_to_human,
+            self.send_sms_confirmation,
+        ]
 
     # ------------------------------------------------------------------ #
     #  Tool 1: check_availability                                          #
