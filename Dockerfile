@@ -37,5 +37,5 @@ ENV DB_PATH=/data/appointments.db
 # Expose dashboard port
 EXPOSE 8000
 
-# Default command — overridden per-service in docker-compose.yml
-CMD ["python", "agent.py", "start"]
+# Start both the FastAPI dashboard server and the LiveKit agent worker
+CMD ["sh", "start.sh"]
