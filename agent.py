@@ -271,14 +271,21 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     service_type = "our service"
     custom_prompt: Optional[str] = None
 
+    voice_override: Optional[str] = None
+    model_override: Optional[str] = None
+    tools_override: Optional[str] = None
+
     if ctx.job.metadata:
         try:
             data = json.loads(ctx.job.metadata)
-            phone_number = data.get("phone_number")
-            lead_name = data.get("lead_name", lead_name)
-            business_name = data.get("business_name", business_name)
-            service_type = data.get("service_type", service_type)
-            custom_prompt = data.get("system_prompt")
+            phone_number   = data.get("phone_number")
+            lead_name      = data.get("lead_name", lead_name)
+            business_name  = data.get("business_name", business_name)
+            service_type   = data.get("service_type", service_type)
+            custom_prompt  = data.get("system_prompt")
+            voice_override = data.get("voice_override")   # from agent profile
+            model_override = data.get("model_override")   # from agent profile
+            tools_override = data.get("tools_override")   # from agent profile (JSON string)
         except (json.JSONDecodeError, AttributeError):
             await _log("warning", "Invalid JSON in job metadata")
 
@@ -295,7 +302,22 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     )
 
     tool_ctx = AppointmentTools(ctx, phone_number, lead_name)
-    enabled_tools = await get_enabled_tools()  # [] = all tools enabled
+
+    # Apply agent-profile overrides to environment for this session
+    if voice_override:
+        os.environ["GEMINI_TTS_VOICE"] = voice_override
+    if model_override:
+        os.environ["GEMINI_MODEL"] = model_override
+
+    # Tools: profile override → global ENABLED_TOOLS setting → all
+    if tools_override:
+        import json as _j
+        try:
+            enabled_tools = _j.loads(tools_override)
+        except Exception:
+            enabled_tools = await get_enabled_tools()
+    else:
+        enabled_tools = await get_enabled_tools()  # [] = all tools enabled
 
     # ------------------------------------------------------------------
     # Connect to LiveKit room
@@ -393,18 +415,28 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                 await _log("warning", f"Recording start failed (non-fatal): {_exc}")
 
     # ------------------------------------------------------------------
-    # Greet — trigger the model to speak first
+    # Greet — trigger the model to speak first.
+    # NOTE: gemini-3.1-flash-live-preview does NOT support generate_reply()
+    # — the plugin explicitly blocks it. The 3.1 model speaks autonomously
+    # from the system prompt as soon as the audio session is established.
+    # For other models, generate_reply() triggers the opening line.
     # ------------------------------------------------------------------
-    greeting_instructions = (
-        f"The call just connected. Greet the lead and ask if you're speaking "
-        f"with {lead_name}, as per your instructions."
-        if phone_number
-        else "Greet the caller warmly."
-    )
-    try:
-        await session.generate_reply(instructions=greeting_instructions)
-    except Exception as _gr_exc:
-        await _log("warning", f"generate_reply failed: {_gr_exc}")
+    _active_model = os.getenv("GEMINI_MODEL", "")
+    if "3.1" in _active_model:
+        # 3.1 model auto-speaks from system prompt — no trigger needed.
+        # generate_reply() would log a noisy ERROR and do nothing.
+        await _log("info", "Gemini 3.1: model will greet autonomously from system prompt")
+    else:
+        greeting_instructions = (
+            f"The call just connected. Greet the lead and ask if you're speaking "
+            f"with {lead_name}, as per your instructions."
+            if phone_number
+            else "Greet the caller warmly."
+        )
+        try:
+            await session.generate_reply(instructions=greeting_instructions)
+        except Exception as _gr_exc:
+            await _log("warning", f"generate_reply failed: {_gr_exc}")
 
 
 # ---------------------------------------------------------------------------

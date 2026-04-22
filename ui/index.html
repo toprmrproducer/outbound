@@ -234,6 +234,7 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
   <button class="tab" data-tab="appointments">📅 Appointments</button>
   <button class="tab" data-tab="logs">📝 Call Logs</button>
   <button class="tab" data-tab="crm">👥 CRM</button>
+  <button class="tab" data-tab="agents">🤖 Agents</button>
   <button class="tab" data-tab="settings">⚙️ Settings</button>
   <button class="tab" data-tab="errors" id="tab-errors-btn">📋 Logs <span class="dot" id="err-dot"></span></button>
   <button class="tab" data-tab="setup">🔧 Setup</button>
@@ -308,6 +309,12 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
         <div><label for="f-lead">Lead Name</label><input type="text" id="f-lead" placeholder="Rahul Sharma" /></div>
         <div><label for="f-biz">Business Name</label><input type="text" id="f-biz" placeholder="HealthFirst Clinic" /></div>
         <div><label for="f-svc">Service Type</label><input type="text" id="f-svc" placeholder="Dental Checkup" /></div>
+        <div>
+          <label for="f-agent-profile">Agent Profile</label>
+          <select id="f-agent-profile">
+            <option value="">— Use Global Default —</option>
+          </select>
+        </div>
       </div>
       <hr class="divider" />
       <div style="font-size:.78rem;color:var(--text2);margin-bottom:.5rem">
@@ -396,6 +403,12 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
         <div>
           <label for="camp-delay">Delay between calls (s)</label>
           <input type="text" id="camp-delay" value="3" style="width:70px" />
+        </div>
+        <div>
+          <label for="camp-agent-profile">Agent Profile</label>
+          <select id="camp-agent-profile">
+            <option value="">— Use Global Default —</option>
+          </select>
         </div>
       </div>
       <label class="prompt-toggle" for="camp-prompt-chk">
@@ -523,6 +536,81 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
         <tbody id="crm-calls-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
       </table></div>
     </div>
+  </div>
+</div>
+
+<!-- ══ AGENTS ══ -->
+<div class="tab-panel" id="tab-agents">
+  <div class="sh">🤖 Agent Profiles</div>
+  <div class="info-box">
+    Create named agent personas with their own <strong>voice, model, system prompt and tools</strong>.<br>
+    Select an agent when placing a call or running a campaign to override the global defaults.<br>
+    Mark one as <strong>default</strong> to use it for all calls with no profile specified.
+  </div>
+
+  <!-- Create / Edit form -->
+  <div class="card" id="agent-form-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <b id="agent-form-title" style="font-size:.9rem">➕ New Agent Profile</b>
+      <button class="btn btn-ghost" style="font-size:.72rem" id="agent-form-cancel" onclick="resetAgentForm()" style="display:none">✕ Cancel</button>
+    </div>
+    <div class="form-grid" style="margin-bottom:.75rem">
+      <div>
+        <label for="agent-name">Profile Name *</label>
+        <input type="text" id="agent-name" placeholder='e.g. "Priya — Dental Clinic"' />
+      </div>
+      <div>
+        <label for="agent-voice">Voice</label>
+        <select id="agent-voice">
+          <option value="Aoede">Aoede — warm female (default)</option>
+          <option value="Fenrir">Fenrir — confident male</option>
+          <option value="Puck">Puck — bright, energetic</option>
+          <option value="Charon">Charon — deep, calm male</option>
+          <option value="Kore">Kore — soft female</option>
+          <option value="Orbit">Orbit — clear, professional</option>
+          <option value="Zephyr">Zephyr — light male</option>
+        </select>
+      </div>
+      <div>
+        <label for="agent-model">Model</label>
+        <select id="agent-model">
+          <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview ⭐</option>
+          <option value="gemini-2.5-flash-native-audio-latest">gemini-2.5-flash-native-audio-latest</option>
+          <option value="gemini-2.5-flash-native-audio-preview-12-2025">gemini-2.5-flash-native-audio-preview-12-2025</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom:.75rem">
+      <label for="agent-tools">Enabled Tools (JSON array — empty = all)</label>
+      <input type="text" id="agent-tools" placeholder='["book_appointment","end_call","lookup_contact"]' />
+      <div style="font-size:.68rem;color:var(--muted);margin-top:.25rem">
+        Available: check_availability · book_appointment · end_call · transfer_to_human · send_sms_confirmation · lookup_contact · remember_details · book_calcom · cancel_calcom
+      </div>
+    </div>
+    <div style="margin-bottom:.75rem">
+      <label for="agent-prompt">System Prompt (leave blank to use global AI Prompt tab setting)</label>
+      <textarea id="agent-prompt" rows="6" placeholder="You are Priya, a friendly appointment booking assistant calling on behalf of {business_name}..."></textarea>
+    </div>
+    <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-green" id="agent-save-btn" onclick="saveAgentProfile()">💾 Save Profile</button>
+      <label style="display:flex;align-items:center;gap:.35rem;text-transform:none;letter-spacing:0;font-size:.82rem;color:var(--text);cursor:pointer;margin:0">
+        <input type="checkbox" id="agent-is-default" /> Set as default agent
+      </label>
+      <input type="hidden" id="agent-edit-id" value="" />
+    </div>
+    <div class="inline-err" id="agent-form-err"></div>
+  </div>
+
+  <!-- Profile list -->
+  <div class="card" style="margin-top:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <div class="sh" style="margin:0;border:none;padding:0">Saved Profiles</div>
+      <button class="btn btn-ghost" style="font-size:.75rem" onclick="loadAgentProfiles()">↻ Refresh</button>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Name</th><th>Voice</th><th>Model</th><th>Tools</th><th>Default</th><th>Actions</th></tr></thead>
+      <tbody id="agents-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+    </table></div>
   </div>
 </div>
 
@@ -982,6 +1070,7 @@ function switchTab(name){
   if(name==='errors')      loadLogs();
   if(name==='crm')         loadCRM();
   if(name==='campaigns')   loadCampaigns();
+  if(name==='agents')      loadAgentProfiles();
 }
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>switchTab(t.dataset.tab)));
 
@@ -1045,11 +1134,12 @@ $('call-form').addEventListener('submit', async e => {
   btn.disabled=true; lbl.innerHTML='<span class="spin"></span> Calling...';
   const override = $('sc-chk').checked ? $('sc-prompt').value.trim() : null;
   const body = {
-    phone:         $('f-phone').value.trim(),
-    lead_name:     $('f-lead').value.trim()||'there',
-    business_name: $('f-biz').value.trim()||'our company',
-    service_type:  $('f-svc').value.trim()||'our service',
-    system_prompt: override||null,
+    phone:             $('f-phone').value.trim(),
+    lead_name:         $('f-lead').value.trim()||'there',
+    business_name:     $('f-biz').value.trim()||'our company',
+    service_type:      $('f-svc').value.trim()||'our service',
+    system_prompt:     override||null,
+    agent_profile_id:  $('f-agent-profile').value||null,
   };
   try{
     const r = await apiPost('/api/call', body);
@@ -1717,7 +1807,8 @@ window.createCampaign = async function(){
   try{
     const r=await apiPost('/api/campaigns',{
       name,contacts:campContacts,schedule_type:schedType,
-      schedule_time:schedTime,call_delay_seconds:delay,system_prompt:prompt
+      schedule_time:schedTime,call_delay_seconds:delay,system_prompt:prompt,
+      agent_profile_id:$('camp-agent-profile').value||null
     });
     const d=await r.json();
     if(!r.ok) throw new Error(d.detail||r.statusText);
@@ -1812,6 +1903,130 @@ window.deleteCampaign = async function(id, name){
 };
 
 // ══════════════════════════════════════════════════════
+// Agent Profiles
+// ══════════════════════════════════════════════════════
+let _agentEditId = null;
+
+async function loadAgentProfiles(){
+  try{
+    const profiles = await api('/api/agent-profiles');
+    const tbody = $('agents-tbody');
+    if(!profiles.length){
+      tbody.innerHTML='<tr><td colspan="6" class="empty">No agent profiles yet — create one above.</td></tr>';
+    } else {
+      tbody.innerHTML = profiles.map(p=>`
+        <tr>
+          <td><strong>${esc(p.name)}</strong></td>
+          <td>${esc(p.voice)}</td>
+          <td><code style="font-size:.72rem">${esc(p.model)}</code></td>
+          <td style="font-size:.72rem;color:var(--muted)">${p.enabled_tools&&p.enabled_tools!=='[]'?esc(p.enabled_tools):'all'}</td>
+          <td>${p.is_default?'<span style="color:var(--accent);font-weight:700">★ default</span>':''}</td>
+          <td style="display:flex;gap:.4rem;flex-wrap:wrap">
+            <button class="btn btn-ghost" style="font-size:.72rem;padding:.25rem .6rem" onclick="editAgentProfile('${p.id}')">✏️ Edit</button>
+            <button class="btn btn-ghost" style="font-size:.72rem;padding:.25rem .6rem" onclick="setDefaultAgentProfile('${p.id}','${esc(p.name)}')">★ Default</button>
+            <button class="btn btn-red" onclick="deleteAgentProfile('${p.id}','${esc(p.name)}')">🗑</button>
+          </td>
+        </tr>`).join('');
+    }
+    // Also populate dropdowns in Single Call + Campaigns tabs
+    _populateProfileDropdowns(profiles);
+  }catch(e){ toast('Failed to load agent profiles: '+e.message,'err') }
+}
+
+function _populateProfileDropdowns(profiles){
+  ['f-agent-profile','camp-agent-profile'].forEach(id=>{
+    const sel=document.getElementById(id);
+    if(!sel) return;
+    const cur=sel.value;
+    sel.innerHTML='<option value="">— Use Global Default —</option>'+
+      profiles.map(p=>`<option value="${p.id}"${p.is_default?' (default)':''}>${esc(p.name)} — ${esc(p.voice)}</option>`).join('');
+    if(cur) sel.value=cur;
+  });
+}
+
+window.saveAgentProfile = async function(){
+  const name=$('agent-name').value.trim();
+  if(!name){showErr('agent-form-err','Profile name is required.');return}
+  const payload={
+    name,
+    voice:$('agent-voice').value,
+    model:$('agent-model').value,
+    system_prompt:$('agent-prompt').value.trim()||null,
+    enabled_tools:$('agent-tools').value.trim()||'[]',
+    is_default:$('agent-is-default').checked
+  };
+  const btn=$('agent-save-btn');
+  btn.disabled=true; btn.textContent='Saving...';
+  try{
+    let r;
+    if(_agentEditId){
+      r=await fetch(`/api/agent-profiles/${_agentEditId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    } else {
+      r=await apiPost('/api/agent-profiles',payload);
+    }
+    const d=await r.json(); if(!r.ok) throw new Error(d.detail||r.statusText);
+    toast(_agentEditId?'Agent profile updated!':'Agent profile created!');
+    resetAgentForm();
+    loadAgentProfiles();
+  }catch(e){showErr('agent-form-err',e.message);toast(e.message,'err')}
+  finally{btn.disabled=false;btn.textContent='💾 Save Profile'}
+};
+
+window.editAgentProfile = async function(id){
+  try{
+    const p=await api(`/api/agent-profiles/${id}`);
+    _agentEditId=id;
+    $('agent-edit-id').value=id;
+    $('agent-name').value=p.name||'';
+    $('agent-voice').value=p.voice||'Aoede';
+    $('agent-model').value=p.model||'gemini-3.1-flash-live-preview';
+    $('agent-tools').value=p.enabled_tools&&p.enabled_tools!=='[]'?p.enabled_tools:'';
+    $('agent-prompt').value=p.system_prompt||'';
+    $('agent-is-default').checked=!!p.is_default;
+    $('agent-form-title').textContent='✏️ Edit: '+p.name;
+    $('agent-form-cancel').style.display='';
+    $('agent-save-btn').textContent='💾 Update Profile';
+    $('agent-form-card').scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(e){toast('Failed to load profile: '+e.message,'err')}
+};
+
+window.deleteAgentProfile = async function(id,name){
+  if(!confirm(`Delete agent profile "${name}"? This cannot be undone.`)) return;
+  try{
+    const r=await apiDel(`/api/agent-profiles/${id}`);
+    if(!r.ok){const d=await r.json();throw new Error(d.detail)}
+    toast(`Profile "${name}" deleted.`);
+    loadAgentProfiles();
+  }catch(e){toast(e.message,'err')}
+};
+
+window.setDefaultAgentProfile = async function(id,name){
+  try{
+    const r=await apiPost(`/api/agent-profiles/${id}/set-default`,{});
+    if(!r.ok){const d=await r.json();throw new Error(d.detail)}
+    toast(`"${name}" is now the default agent.`);
+    loadAgentProfiles();
+  }catch(e){toast(e.message,'err')}
+};
+
+window.resetAgentForm = function(){
+  _agentEditId=null;
+  $('agent-edit-id').value='';
+  $('agent-name').value='';
+  $('agent-voice').value='Aoede';
+  $('agent-model').value='gemini-3.1-flash-live-preview';
+  $('agent-tools').value='';
+  $('agent-prompt').value='';
+  $('agent-is-default').checked=false;
+  $('agent-form-title').textContent='➕ New Agent Profile';
+  $('agent-form-cancel').style.display='none';
+  $('agent-save-btn').textContent='💾 Save Profile';
+  const err=$('agent-form-err'); if(err) err.textContent='';
+};
+
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+// ══════════════════════════════════════════════════════
 // Tool Toggles
 // ══════════════════════════════════════════════════════
 const ALL_TOOLS=['check_availability','book_appointment','end_call','transfer_to_human',
@@ -1850,6 +2065,7 @@ function init(){
   loadCalls();
   loadAppointments();
   loadLogs();
+  loadAgentProfiles();  // populates dropdowns on all tabs
   setInterval(loadStats, 10000);
   scheduleLogsRefresh();  // 5s auto-refresh, pause/resume controlled by user
 }

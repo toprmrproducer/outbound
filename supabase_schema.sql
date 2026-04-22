@@ -76,3 +76,19 @@ CREATE TABLE IF NOT EXISTS contact_memory (
 );
 ALTER TABLE contact_memory DISABLE ROW LEVEL SECURITY;
 CREATE INDEX IF NOT EXISTS idx_contact_memory_phone ON contact_memory (phone_number);
+
+-- Agent profile FK on campaigns
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS agent_profile_id TEXT;
+
+-- Agent profiles — named reusable agent configurations
+CREATE TABLE IF NOT EXISTS agent_profiles (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    voice TEXT NOT NULL DEFAULT 'Aoede',
+    model TEXT NOT NULL DEFAULT 'gemini-3.1-flash-live-preview',
+    system_prompt TEXT,
+    enabled_tools TEXT DEFAULT '[]',   -- JSON array e.g. ["book_appointment","end_call"]
+    is_default INTEGER DEFAULT 0,      -- 1 = default agent for calls with no profile specified
+    created_at TEXT NOT NULL
+);
+ALTER TABLE agent_profiles DISABLE ROW LEVEL SECURITY;

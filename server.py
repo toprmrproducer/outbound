@@ -61,6 +61,12 @@ from db import (
     get_all_calls,
     get_all_campaigns,
     get_all_settings,
+    get_all_agent_profiles,
+    get_agent_profile,
+    create_agent_profile,
+    update_agent_profile,
+    delete_agent_profile,
+    set_default_agent_profile,
     get_calls_by_phone,
     get_campaign,
     get_contacts,
@@ -131,6 +137,16 @@ class CallRequest(BaseModel):
     business_name: str = "our company"
     service_type: str = "our service"
     system_prompt: Optional[str] = None
+    agent_profile_id: Optional[str] = None   # override voice/model/prompt from a saved profile
+
+
+class AgentProfileRequest(BaseModel):
+    name: str
+    voice: str = "Aoede"
+    model: str = "gemini-3.1-flash-live-preview"
+    system_prompt: Optional[str] = None
+    enabled_tools: str = "[]"
+    is_default: bool = False
 
 
 class PromptRequest(BaseModel):
@@ -152,6 +168,7 @@ class CampaignRequest(BaseModel):
     schedule_time: str = "09:00"  # HH:MM
     call_delay_seconds: int = 3
     system_prompt: Optional[str] = None
+    agent_profile_id: Optional[str] = None  # override voice/model/prompt from saved profile
 
 
 class StatusRequest(BaseModel):
@@ -162,17 +179,26 @@ class StatusRequest(BaseModel):
 # Campaign runner helpers
 # ---------------------------------------------------------------------------
 
-async def _dispatch_one(lk, lk_api, contact: dict, room_name: str, prompt: Optional[str]) -> bool:
+async def _dispatch_one(lk, lk_api, contact: dict, room_name: str, prompt: Optional[str], profile: Optional[dict] = None) -> bool:
     """Dispatch a single call from a campaign. Returns True on success."""
     try:
         saved_prompt = prompt or (await get_setting("system_prompt", "")) or None
-        metadata = {
+        metadata: dict = {
             "phone_number": contact["phone"],
             "lead_name": contact.get("lead_name", "there"),
             "business_name": contact.get("business_name", "our company"),
             "service_type": contact.get("service_type", "our service"),
             "system_prompt": saved_prompt,
         }
+        if profile:
+            if not metadata["system_prompt"] and profile.get("system_prompt"):
+                metadata["system_prompt"] = profile["system_prompt"]
+            if profile.get("voice"):
+                metadata["voice_override"] = profile["voice"]
+            if profile.get("model"):
+                metadata["model_override"] = profile["model"]
+            if profile.get("enabled_tools"):
+                metadata["tools_override"] = profile["enabled_tools"]
         await lk.agent_dispatch.create_dispatch(
             lk_api.CreateAgentDispatchRequest(
                 agent_name="outbound-caller",
@@ -200,6 +226,11 @@ async def _run_campaign(campaign_id: str) -> None:
 
     delay = int(campaign.get("call_delay_seconds") or 3)
     prompt = campaign.get("system_prompt")
+    agent_profile_id = campaign.get("agent_profile_id")
+    profile = None
+    if agent_profile_id:
+        from db import get_agent_profile
+        profile = await get_agent_profile(agent_profile_id)
 
     url    = await eff("LIVEKIT_URL")
     key    = await eff("LIVEKIT_API_KEY")
@@ -224,7 +255,7 @@ async def _run_campaign(campaign_id: str) -> None:
                 fail_count += 1
                 continue
             room_name = f"camp-{campaign_id[:8]}-{phone.replace('+','')}-{random.randint(100,999)}"
-            success = await _dispatch_one(lk, lk_api_module, contact, room_name, prompt)
+            success = await _dispatch_one(lk, lk_api_module, contact, room_name, prompt, profile)
             if success:
                 ok_count += 1
             else:
@@ -421,6 +452,20 @@ async def api_trigger_call(req: CallRequest):
         room_name = f"call-{req.phone.replace('+', '')}-{random.randint(1000, 9999)}"
 
         effective_prompt = req.system_prompt
+        effective_voice = None
+        effective_model = None
+        effective_tools = None
+
+        # Apply agent profile overrides if specified
+        if req.agent_profile_id:
+            profile = await get_agent_profile(req.agent_profile_id)
+            if profile:
+                if not effective_prompt and profile.get("system_prompt"):
+                    effective_prompt = profile["system_prompt"]
+                effective_voice = profile.get("voice")
+                effective_model = profile.get("model")
+                effective_tools = profile.get("enabled_tools")
+
         if not effective_prompt:
             saved = await get_setting("system_prompt", "")
             effective_prompt = saved if saved else None
@@ -432,6 +477,12 @@ async def api_trigger_call(req: CallRequest):
             "service_type": req.service_type,
             "system_prompt": effective_prompt,
         }
+        if effective_voice:
+            metadata["voice_override"] = effective_voice
+        if effective_model:
+            metadata["model_override"] = effective_model
+        if effective_tools:
+            metadata["tools_override"] = effective_tools
 
         dispatch = await lk.agent_dispatch.create_dispatch(
             lk_api.CreateAgentDispatchRequest(
@@ -533,6 +584,7 @@ async def api_create_campaign(req: CampaignRequest):
         schedule_time=req.schedule_time,
         call_delay_seconds=req.call_delay_seconds,
         system_prompt=req.system_prompt,
+        agent_profile_id=req.agent_profile_id,
     )
 
     campaign = await get_campaign(campaign_id)
@@ -684,6 +736,82 @@ async def api_get_errors(limit: int = Query(100, ge=1, le=500)):
 async def api_clear_errors():
     await clear_errors()
     return {"status": "cleared"}
+
+
+# ---------------------------------------------------------------------------
+# Agent Profiles
+# ---------------------------------------------------------------------------
+
+@app.get("/api/agent-profiles")
+async def api_list_agent_profiles():
+    try:
+        profiles = await get_all_agent_profiles()
+        return profiles
+    except Exception as exc:
+        logger.error("Error listing agent profiles: %s", exc)
+        await log_error("server", f"Error listing agent profiles: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/agent-profiles")
+async def api_create_agent_profile(req: AgentProfileRequest):
+    try:
+        profile_id = await create_agent_profile(
+            name=req.name,
+            voice=req.voice,
+            model=req.model,
+            system_prompt=req.system_prompt,
+            enabled_tools=req.enabled_tools,
+            is_default=req.is_default,
+        )
+        return {"id": profile_id, "status": "created"}
+    except Exception as exc:
+        logger.error("Error creating agent profile: %s", exc)
+        await log_error("server", f"Error creating agent profile: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.put("/api/agent-profiles/{profile_id}")
+async def api_update_agent_profile(profile_id: str, req: AgentProfileRequest):
+    try:
+        updates = {
+            "name": req.name,
+            "voice": req.voice,
+            "model": req.model,
+            "system_prompt": req.system_prompt,
+            "enabled_tools": req.enabled_tools,
+            "is_default": 1 if req.is_default else 0,
+        }
+        ok = await update_agent_profile(profile_id, updates)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        return {"status": "updated"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.delete("/api/agent-profiles/{profile_id}")
+async def api_delete_agent_profile(profile_id: str):
+    try:
+        ok = await delete_agent_profile(profile_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        return {"status": "deleted"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/agent-profiles/{profile_id}/set-default")
+async def api_set_default_profile(profile_id: str):
+    try:
+        await set_default_agent_profile(profile_id)
+        return {"status": "default set"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ---------------------------------------------------------------------------

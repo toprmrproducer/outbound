@@ -9,22 +9,24 @@ from typing import Optional
 # Users override these via the Settings tab (stored in Supabase).
 # ---------------------------------------------------------------------------
 DEFAULTS = {
-    "LIVEKIT_URL":             "wss://abc-dtz1tiod.livekit.cloud",
-    "LIVEKIT_API_KEY":         "API4MSqHSSyiVdh",
-    "LIVEKIT_API_SECRET":      "pG6TNGyYfi2djbRgxo8g1fky7DoI2C5w8nHSUFqxRjg",
-    "GOOGLE_API_KEY":          "",  # set via Settings tab — never commit API keys to git
-    "GEMINI_MODEL":            "gemini-2.5-flash-native-audio-preview-12-2025",
-    "GEMINI_TTS_VOICE":        "Aoede",
-    "USE_GEMINI_REALTIME":     "true",
-    "VOBIZ_SIP_DOMAIN":        "81b129db.sip.vobiz.ai",
-    "VOBIZ_USERNAME":          "testyt",
-    "VOBIZ_PASSWORD":          "test12345@",
-    "VOBIZ_OUTBOUND_NUMBER":   "+918071387394",
-    "OUTBOUND_TRUNK_ID":       "",
-    "DEFAULT_TRANSFER_NUMBER": "+918071387394",
-    "SUPABASE_URL":            "https://iocllooszyeeysfyxbfq.supabase.co",
-    "SUPABASE_SERVICE_KEY":    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlvY2xsb29zenllZXlzZnl4YmZxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Njc5MjAzNiwiZXhwIjoyMDkyMzY4MDM2fQ.RERrvk0ZXEeqezxsPhXwtdtD_r-J-e2uR1Qb7SA4lPY",
-    "DEEPGRAM_API_KEY":        "85e05deac6b575d89f80ad25fc7a2b662e52f14f",
+    # ── All sensitive values are loaded from environment variables (Coolify) ──
+    # ── or from the Settings tab (stored in Supabase). Never hardcode secrets. ──
+    "LIVEKIT_URL":             os.getenv("LIVEKIT_URL", ""),
+    "LIVEKIT_API_KEY":         os.getenv("LIVEKIT_API_KEY", ""),
+    "LIVEKIT_API_SECRET":      os.getenv("LIVEKIT_API_SECRET", ""),
+    "GOOGLE_API_KEY":          os.getenv("GOOGLE_API_KEY", ""),
+    "GEMINI_MODEL":            os.getenv("GEMINI_MODEL", "gemini-3.1-flash-live-preview"),
+    "GEMINI_TTS_VOICE":        os.getenv("GEMINI_TTS_VOICE", "Aoede"),
+    "USE_GEMINI_REALTIME":     os.getenv("USE_GEMINI_REALTIME", "true"),
+    "VOBIZ_SIP_DOMAIN":        os.getenv("VOBIZ_SIP_DOMAIN", ""),
+    "VOBIZ_USERNAME":          os.getenv("VOBIZ_USERNAME", ""),
+    "VOBIZ_PASSWORD":          os.getenv("VOBIZ_PASSWORD", ""),
+    "VOBIZ_OUTBOUND_NUMBER":   os.getenv("VOBIZ_OUTBOUND_NUMBER", ""),
+    "OUTBOUND_TRUNK_ID":       os.getenv("OUTBOUND_TRUNK_ID", ""),
+    "DEFAULT_TRANSFER_NUMBER": os.getenv("DEFAULT_TRANSFER_NUMBER", ""),
+    "SUPABASE_URL":            os.getenv("SUPABASE_URL", ""),
+    "SUPABASE_SERVICE_KEY":    os.getenv("SUPABASE_SERVICE_KEY", ""),
+    "DEEPGRAM_API_KEY":        os.getenv("DEEPGRAM_API_KEY", ""),
 }
 
 
@@ -370,13 +372,14 @@ async def create_campaign(
     schedule_time: str = "09:00",
     call_delay_seconds: int = 3,
     system_prompt: Optional[str] = None,
+    agent_profile_id: Optional[str] = None,
 ) -> str:
     campaign_id = str(uuid.uuid4())
     db = await _adb()
     row: dict = {
         "id": campaign_id,
         "name": name,
-        "status": "active" if schedule_type == "once" else "active",
+        "status": "active",
         "contacts_json": contacts_json,
         "schedule_type": schedule_type,
         "schedule_time": schedule_time,
@@ -387,6 +390,8 @@ async def create_campaign(
     }
     if system_prompt:
         row["system_prompt"] = system_prompt
+    if agent_profile_id:
+        row["agent_profile_id"] = agent_profile_id
     await db.table("campaigns").insert(row).execute()
     return campaign_id
 
@@ -460,6 +465,62 @@ async def compress_contact_memory(phone: str, compressed: str) -> None:
         "insight": compressed[:2000],
         "created_at": datetime.now().isoformat(),
     }).execute()
+
+
+# ── Agent Profiles ────────────────────────────────────────────────────────────
+
+async def get_all_agent_profiles() -> list:
+    db = await _adb()
+    result = await db.table("agent_profiles").select("*").order("created_at", desc=False).execute()
+    return result.data or []
+
+
+async def get_agent_profile(profile_id: str) -> Optional[dict]:
+    db = await _adb()
+    result = await db.table("agent_profiles").select("*").eq("id", profile_id).maybe_single().execute()
+    return result.data if result else None
+
+
+async def create_agent_profile(
+    name: str,
+    voice: str = "Aoede",
+    model: str = "gemini-3.1-flash-live-preview",
+    system_prompt: Optional[str] = None,
+    enabled_tools: str = "[]",
+    is_default: bool = False,
+) -> str:
+    profile_id = str(uuid.uuid4())
+    db = await _adb()
+    await db.table("agent_profiles").insert({
+        "id": profile_id,
+        "name": name,
+        "voice": voice,
+        "model": model,
+        "system_prompt": system_prompt,
+        "enabled_tools": enabled_tools,
+        "is_default": 1 if is_default else 0,
+        "created_at": datetime.now().isoformat(),
+    }).execute()
+    return profile_id
+
+
+async def update_agent_profile(profile_id: str, updates: dict) -> bool:
+    db = await _adb()
+    result = await db.table("agent_profiles").update(updates).eq("id", profile_id).execute()
+    return len(result.data or []) > 0
+
+
+async def delete_agent_profile(profile_id: str) -> bool:
+    db = await _adb()
+    result = await db.table("agent_profiles").delete().eq("id", profile_id).execute()
+    return len(result.data or []) > 0
+
+
+async def set_default_agent_profile(profile_id: str) -> None:
+    """Clear all defaults then set one."""
+    db = await _adb()
+    await db.table("agent_profiles").update({"is_default": 0}).neq("id", "").execute()
+    await db.table("agent_profiles").update({"is_default": 1}).eq("id", profile_id).execute()
 
 
 # ── Enabled tools ─────────────────────────────────────────────────────────────
