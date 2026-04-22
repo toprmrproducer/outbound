@@ -43,6 +43,8 @@ SENSITIVE_KEYS = {
     "VOBIZ_PASSWORD",
     "TWILIO_AUTH_TOKEN",
     "SUPABASE_SERVICE_KEY",
+    "AWS_SECRET_ACCESS_KEY",
+    "CALCOM_API_KEY",
 }
 
 
@@ -87,6 +89,9 @@ async def get_all_settings() -> dict:
         "VOBIZ_SIP_DOMAIN", "VOBIZ_USERNAME", "VOBIZ_PASSWORD",
         "VOBIZ_OUTBOUND_NUMBER", "OUTBOUND_TRUNK_ID", "DEFAULT_TRANSFER_NUMBER",
         "DEEPGRAM_API_KEY", "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER",
+        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BUCKET_NAME", "AWS_REGION", "S3_ENDPOINT",
+        "CALCOM_API_KEY", "CALCOM_EVENT_TYPE_ID", "CALCOM_TIMEZONE",
+        "ENABLED_TOOLS",
     ]
     out: dict = {}
     for k in KNOWN_KEYS:
@@ -262,9 +267,11 @@ async def log_call(
     outcome: str,
     reason: str,
     duration_seconds: int,
+    recording_url: Optional[str] = None,
+    notes: Optional[str] = None,
 ) -> None:
     db = await _adb()
-    await db.table("call_logs").insert({
+    row: dict = {
         "id": str(uuid.uuid4()),
         "phone_number": phone_number,
         "lead_name": lead_name,
@@ -272,7 +279,201 @@ async def log_call(
         "reason": reason,
         "duration_seconds": duration_seconds,
         "timestamp": datetime.now().isoformat(),
+    }
+    if recording_url:
+        row["recording_url"] = recording_url
+    if notes:
+        row["notes"] = notes
+    await db.table("call_logs").insert(row).execute()
+
+
+async def get_contacts() -> list:
+    """Return unique contacts aggregated from call_logs, sorted by last call."""
+    db = await _adb()
+    result = await db.table("call_logs").select("*").order("timestamp", desc=True).execute()
+    rows = result.data or []
+
+    contacts: dict = {}
+    for row in rows:
+        phone = row["phone_number"]
+        if phone not in contacts:
+            contacts[phone] = {
+                "phone_number": phone,
+                "lead_name": row.get("lead_name"),
+                "total_calls": 0,
+                "booked": 0,
+                "last_call": row["timestamp"],
+                "last_outcome": row.get("outcome"),
+            }
+        contacts[phone]["total_calls"] += 1
+        if row.get("outcome") == "booked":
+            contacts[phone]["booked"] += 1
+
+    return sorted(contacts.values(), key=lambda c: c["last_call"], reverse=True)
+
+
+async def get_calls_by_phone(phone: str) -> list:
+    db = await _adb()
+    result = await (
+        db.table("call_logs")
+        .select("*")
+        .eq("phone_number", phone)
+        .order("timestamp", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+async def update_call_notes(call_id: str, notes: str) -> bool:
+    db = await _adb()
+    result = await db.table("call_logs").update({"notes": notes}).eq("id", call_id).execute()
+    return len(result.data or []) > 0
+
+
+async def update_call_recording(call_id: str, recording_url: str) -> bool:
+    db = await _adb()
+    result = await db.table("call_logs").update({"recording_url": recording_url}).eq("id", call_id).execute()
+    return len(result.data or []) > 0
+
+
+# ── Appointments by phone ─────────────────────────────────────────────────────
+
+async def get_appointments_by_phone(phone: str) -> list:
+    db = await _adb()
+    result = await (
+        db.table("appointments")
+        .select("*")
+        .eq("phone", phone)
+        .order("date", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+async def update_appointment_calendar_event(appointment_id: str, event_id: str) -> bool:
+    db = await _adb()
+    result = await (
+        db.table("appointments")
+        .update({"calendar_event_id": event_id})
+        .eq("id", appointment_id)
+        .execute()
+    )
+    return len(result.data or []) > 0
+
+
+# ── Campaigns ─────────────────────────────────────────────────────────────────
+
+async def create_campaign(
+    name: str,
+    contacts_json: str,
+    schedule_type: str = "once",
+    schedule_time: str = "09:00",
+    call_delay_seconds: int = 3,
+    system_prompt: Optional[str] = None,
+) -> str:
+    campaign_id = str(uuid.uuid4())
+    db = await _adb()
+    row: dict = {
+        "id": campaign_id,
+        "name": name,
+        "status": "active" if schedule_type == "once" else "active",
+        "contacts_json": contacts_json,
+        "schedule_type": schedule_type,
+        "schedule_time": schedule_time,
+        "call_delay_seconds": call_delay_seconds,
+        "created_at": datetime.now().isoformat(),
+        "total_dispatched": 0,
+        "total_failed": 0,
+    }
+    if system_prompt:
+        row["system_prompt"] = system_prompt
+    await db.table("campaigns").insert(row).execute()
+    return campaign_id
+
+
+async def get_all_campaigns() -> list:
+    db = await _adb()
+    result = await db.table("campaigns").select("*").order("created_at", desc=True).execute()
+    return result.data or []
+
+
+async def get_campaign(campaign_id: str) -> Optional[dict]:
+    db = await _adb()
+    result = await db.table("campaigns").select("*").eq("id", campaign_id).maybe_single().execute()
+    return result.data if result else None
+
+
+async def update_campaign_status(campaign_id: str, status: str) -> bool:
+    db = await _adb()
+    result = await db.table("campaigns").update({"status": status}).eq("id", campaign_id).execute()
+    return len(result.data or []) > 0
+
+
+async def update_campaign_run_stats(campaign_id: str, dispatched: int, failed: int) -> None:
+    db = await _adb()
+    await db.table("campaigns").update({
+        "last_run_at": datetime.now().isoformat(),
+        "total_dispatched": dispatched,
+        "total_failed": failed,
+        "status": "completed",
+    }).eq("id", campaign_id).execute()
+
+
+async def delete_campaign(campaign_id: str) -> bool:
+    db = await _adb()
+    result = await db.table("campaigns").delete().eq("id", campaign_id).execute()
+    return len(result.data or []) > 0
+
+
+# ── Contact Memory ────────────────────────────────────────────────────────────
+
+async def add_contact_memory(phone: str, insight: str) -> None:
+    db = await _adb()
+    await db.table("contact_memory").insert({
+        "id": str(uuid.uuid4()),
+        "phone_number": phone,
+        "insight": insight[:1000],
+        "created_at": datetime.now().isoformat(),
     }).execute()
+
+
+async def get_contact_memory(phone: str) -> list:
+    db = await _adb()
+    result = await (
+        db.table("contact_memory")
+        .select("insight, created_at")
+        .eq("phone_number", phone)
+        .order("created_at", desc=True)
+        .limit(20)
+        .execute()
+    )
+    return result.data or []
+
+
+async def compress_contact_memory(phone: str, compressed: str) -> None:
+    """Replace all memory entries for a phone with one compressed summary."""
+    db = await _adb()
+    await db.table("contact_memory").delete().eq("phone_number", phone).execute()
+    await db.table("contact_memory").insert({
+        "id": str(uuid.uuid4()),
+        "phone_number": phone,
+        "insight": compressed[:2000],
+        "created_at": datetime.now().isoformat(),
+    }).execute()
+
+
+# ── Enabled tools ─────────────────────────────────────────────────────────────
+
+async def get_enabled_tools() -> list:
+    """Return list of enabled tool names from settings, or all tools if not set."""
+    import json as _json
+    val = await get_setting("ENABLED_TOOLS", "")
+    if not val:
+        return []  # empty = all enabled
+    try:
+        return _json.loads(val)
+    except Exception:
+        return []
 
 
 async def get_all_calls(page: int = 1, limit: int = 20) -> list:

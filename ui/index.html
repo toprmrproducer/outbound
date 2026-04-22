@@ -198,6 +198,14 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
 .toast.err{border-left:3px solid var(--danger)}
 @keyframes tin{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
 
+/* ── Live Config chips ── */
+.cfg-chip{background:#111;border:1px solid var(--border);border-radius:6px;padding:.6rem .85rem;
+  cursor:pointer;transition:border-color .15s}
+.cfg-chip:hover{border-color:var(--accent)}
+.cfg-chip-lbl{font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:.25rem}
+.cfg-chip-val{font-family:var(--mono);font-size:.82rem;color:var(--accent);font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
 /* ── Spinner ── */
 .spin{display:inline-block;width:13px;height:13px;border:2px solid #00ff8830;
   border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
@@ -221,9 +229,11 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
   <button class="tab active" data-tab="stats">📊 Stats</button>
   <button class="tab" data-tab="single">📞 Single Call</button>
   <button class="tab" data-tab="batch">📋 Batch Call</button>
+  <button class="tab" data-tab="campaigns">🚀 Campaigns</button>
   <button class="tab" data-tab="prompt">✏️ AI Prompt</button>
   <button class="tab" data-tab="appointments">📅 Appointments</button>
   <button class="tab" data-tab="logs">📝 Call Logs</button>
+  <button class="tab" data-tab="crm">👥 CRM</button>
   <button class="tab" data-tab="settings">⚙️ Settings</button>
   <button class="tab" data-tab="errors" id="tab-errors-btn">📋 Logs <span class="dot" id="err-dot"></span></button>
   <button class="tab" data-tab="setup">🔧 Setup</button>
@@ -240,6 +250,51 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
     <div class="stat"><div class="val" id="s-ni">—</div><div class="lbl">Not Interested</div></div>
     <div class="stat blue"><div class="val" id="s-rate">—</div><div class="lbl">Booking Rate</div></div>
     <div class="stat blue"><div class="val" id="s-dur">—</div><div class="lbl">Avg Duration (s)</div></div>
+  </div>
+
+  <!-- Live Config card -->
+  <div class="card" style="margin-top:1.25rem">
+    <div class="sh" style="margin-bottom:1rem">Live Configuration <span style="color:var(--muted);font-size:.65rem;font-weight:400">— click any value to edit in Settings</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.75rem" id="live-config-grid">
+      <div class="cfg-chip" onclick="switchTab('settings')">
+        <div class="cfg-chip-lbl">AI Model</div>
+        <div class="cfg-chip-val" id="lc-model">—</div>
+      </div>
+      <div class="cfg-chip" onclick="switchTab('settings')">
+        <div class="cfg-chip-lbl">Voice</div>
+        <div class="cfg-chip-val" id="lc-voice">—</div>
+      </div>
+      <div class="cfg-chip" onclick="switchTab('settings')">
+        <div class="cfg-chip-lbl">Forwarding Number</div>
+        <div class="cfg-chip-val" id="lc-fwd">—</div>
+      </div>
+      <div class="cfg-chip" onclick="switchTab('settings')">
+        <div class="cfg-chip-lbl">Outbound Number (DID)</div>
+        <div class="cfg-chip-val" id="lc-did">—</div>
+      </div>
+      <div class="cfg-chip" onclick="switchTab('settings')">
+        <div class="cfg-chip-lbl">Cal.com</div>
+        <div class="cfg-chip-val" id="lc-calcom">—</div>
+      </div>
+      <div class="cfg-chip" onclick="switchTab('prompt')">
+        <div class="cfg-chip-lbl">AI Prompt</div>
+        <div class="cfg-chip-val" id="lc-prompt">—</div>
+      </div>
+      <div class="cfg-chip" onclick="switchTab('settings')">
+        <div class="cfg-chip-lbl">SIP Trunk</div>
+        <div class="cfg-chip-val" id="lc-trunk">—</div>
+      </div>
+      <div class="cfg-chip" onclick="switchTab('settings')">
+        <div class="cfg-chip-lbl">Realtime Mode</div>
+        <div class="cfg-chip-val" id="lc-realtime">—</div>
+      </div>
+    </div>
+    <div style="margin-top:.75rem;font-size:.72rem;color:var(--muted)">
+      <strong style="color:var(--text2)">Cost estimate (Gemini Live):</strong>
+      Vobiz SIP ≈ ₹1.00/min · LiveKit ≈ ₹0.17/min · Gemini Live ≈ ₹0.03/min · Deepgram TTS ≈ ₹0.01/call
+      → <strong style="color:var(--accent)">≈ ₹1.20/min total</strong>
+      · A typical 2-min call costs ≈ <strong style="color:var(--accent)">₹2.50</strong>
+    </div>
   </div>
 </div>
 
@@ -310,6 +365,76 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
   </div>
 </div>
 
+<!-- ══ CAMPAIGNS ══ -->
+<div class="tab-panel" id="tab-campaigns">
+  <div class="sh">🚀 Campaigns — Scheduled Mass Calling</div>
+  <div class="info-box">
+    Campaigns let you schedule mass outbound calls. <strong>Once</strong> runs immediately. <strong>Daily</strong> and <strong>Weekdays</strong> use APScheduler to fire every morning at your chosen time.<br>
+    CSV header: <code>phone,lead_name,business_name,service_type</code>
+  </div>
+
+  <!-- Create campaign -->
+  <div class="card" id="camp-create-card">
+    <div class="settings-group-title" style="margin-bottom:.75rem;cursor:pointer" onclick="toggleCampForm()">
+      + Create New Campaign <span id="camp-form-toggle" style="font-size:.7rem;color:var(--muted)">▼ expand</span>
+    </div>
+    <div id="camp-form" style="display:none">
+      <div class="form-grid" style="margin-bottom:.75rem">
+        <div><label for="camp-name">Campaign Name *</label><input type="text" id="camp-name" placeholder="Morning Dental Outreach" /></div>
+        <div>
+          <label for="camp-schedule">Schedule</label>
+          <select id="camp-schedule" onchange="onCampScheduleChange()">
+            <option value="once">Run Once (immediately)</option>
+            <option value="daily">Daily at time</option>
+            <option value="weekdays">Weekdays (Mon–Fri) at time</option>
+          </select>
+        </div>
+        <div id="camp-time-wrap" style="display:none">
+          <label for="camp-time">Time (IST)</label>
+          <input type="text" id="camp-time" value="09:00" placeholder="09:00" style="width:100px" />
+        </div>
+        <div>
+          <label for="camp-delay">Delay between calls (s)</label>
+          <input type="text" id="camp-delay" value="3" style="width:70px" />
+        </div>
+      </div>
+      <label class="prompt-toggle" for="camp-prompt-chk">
+        <input type="checkbox" id="camp-prompt-chk" onchange="$('camp-prompt-area').style.display=this.checked?'block':'none'" /> Use custom prompt for this campaign
+      </label>
+      <div id="camp-prompt-area" style="display:none;margin:.5rem 0">
+        <textarea id="camp-prompt" rows="4" placeholder="You are Priya from {business_name}..."></textarea>
+      </div>
+      <hr class="divider" />
+      <div style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:.75rem">
+        <div><label for="camp-file">CSV File *</label><input type="file" id="camp-file" accept=".csv" style="font-size:.8rem;color:var(--text);cursor:pointer;display:block;margin-top:.25rem" /></div>
+        <button class="btn btn-blue" id="camp-parse-btn" onclick="parseCampCSV()">📂 Parse CSV</button>
+      </div>
+      <div id="camp-preview" style="display:none;margin-bottom:.75rem">
+        <div style="font-size:.72rem;color:var(--muted);margin-bottom:.4rem"><span id="camp-count">0</span> contacts loaded</div>
+        <div class="tw"><table><thead><tr><th>#</th><th>Phone</th><th>Lead</th><th>Business</th></tr></thead>
+        <tbody id="camp-preview-tbody"></tbody></table></div>
+      </div>
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap">
+        <button class="btn btn-green" id="camp-create-btn" onclick="createCampaign()" disabled>🚀 Create Campaign</button>
+        <button class="btn btn-ghost" onclick="resetCampForm()">↺ Reset</button>
+      </div>
+      <div class="inline-err" id="camp-err"></div>
+    </div>
+  </div>
+
+  <!-- Campaign list -->
+  <div class="card" style="margin-top:1rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.75rem">
+      <div class="sh" style="margin:0;border:none;padding:0">Saved Campaigns</div>
+      <button class="btn btn-ghost" style="font-size:.75rem" onclick="loadCampaigns()">↻ Refresh</button>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Name</th><th>Schedule</th><th>Contacts</th><th>Dispatched</th><th>Failed</th><th>Last Run</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="camp-tbody"><tr><td colspan="8" class="empty">Loading...</td></tr></tbody>
+    </table></div>
+  </div>
+</div>
+
 <!-- ══ AI PROMPT ══ -->
 <div class="tab-panel" id="tab-prompt">
   <div class="sh">✏️ AI Agent System Prompt</div>
@@ -365,6 +490,38 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
       <button id="calls-prev" disabled>← Prev</button>
       <button id="calls-next">Next →</button>
       <span id="calls-pg">Page 1</span>
+    </div>
+  </div>
+</div>
+
+<!-- ══ CRM ══ -->
+<div class="tab-panel" id="tab-crm">
+  <div class="sh">👥 CRM — Contact History</div>
+  <div class="card">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:.6rem">
+      <button class="btn btn-ghost" onclick="loadCRM()">↻ Refresh</button>
+    </div>
+    <div class="tw"><table>
+      <thead><tr><th>Phone</th><th>Lead Name</th><th>Total Calls</th><th>Booked</th><th>Last Call</th><th>Last Outcome</th><th></th></tr></thead>
+      <tbody id="crm-tbody"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody>
+    </table></div>
+  </div>
+
+  <!-- Contact detail drawer -->
+  <div id="crm-detail" style="display:none;margin-top:1rem">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap">
+        <div>
+          <div style="font-size:1.05rem;font-weight:700;font-family:var(--mono);color:var(--accent)" id="crm-detail-phone">—</div>
+          <div style="font-size:.8rem;color:var(--text2)" id="crm-detail-name">—</div>
+        </div>
+        <button class="btn btn-ghost" style="margin-left:auto;font-size:.72rem" onclick="closeCRMDetail()">✕ Close</button>
+      </div>
+      <div class="sh" style="margin-bottom:.75rem">Call History</div>
+      <div class="tw"><table id="crm-calls-table">
+        <thead><tr><th>Date</th><th>Outcome</th><th>Duration</th><th>Reason</th><th>Notes</th><th>Recording</th></tr></thead>
+        <tbody id="crm-calls-tbody"><tr><td colspan="6" class="empty">Loading...</td></tr></tbody>
+      </table></div>
     </div>
   </div>
 </div>
@@ -439,9 +596,13 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
       <div>
         <label for="s-g-model">Gemini Model</label>
         <select id="s-g-model">
-          <optgroup label="Gemini 2.5 Live (Latest — Gemini API)">
-            <option value="gemini-2.5-flash-native-audio-preview-12-2025">gemini-2.5-flash-native-audio-preview-12-2025 ⭐ recommended</option>
-            <option value="gemini-2.5-flash-exp-native-audio-thinking-dialog">gemini-2.5-flash-exp-native-audio-thinking-dialog</option>
+          <optgroup label="Gemini 3.1 Live (Latest — Gemini API)">
+            <option value="gemini-3.1-flash-live-preview">gemini-3.1-flash-live-preview ⭐ recommended</option>
+          </optgroup>
+          <optgroup label="Gemini 2.5 Live (Gemini API)">
+            <option value="gemini-2.5-flash-native-audio-latest">gemini-2.5-flash-native-audio-latest</option>
+            <option value="gemini-2.5-flash-native-audio-preview-12-2025">gemini-2.5-flash-native-audio-preview-12-2025</option>
+            <option value="gemini-2.5-flash-native-audio-preview-09-2025">gemini-2.5-flash-native-audio-preview-09-2025</option>
           </optgroup>
           <optgroup label="Gemini 2.0 Live (Gemini API)">
             <option value="gemini-2.0-flash-live-001">gemini-2.0-flash-live-001</option>
@@ -553,6 +714,130 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
     <div class="group-actions">
       <button class="btn btn-green" onclick="saveGroup('twilio')">💾 Save Twilio Config</button>
       <span class="group-save-status" id="gss-twilio"></span>
+    </div>
+  </div>
+
+  <!-- ── Group 5: S3 / Supabase Storage ── -->
+  <div class="card settings-group" id="grp-s3">
+    <div class="settings-group-title">
+      5. Storage — S3 / Supabase
+      <span class="group-status" style="background:#33333318;color:#888;border:1px solid #333;font-size:.68rem;padding:2px 7px;border-radius:20px" id="gs-s3">Optional — Call Recordings</span>
+    </div>
+    <p style="font-size:.75rem;color:var(--text2);margin-bottom:.75rem">
+      Configure to automatically record and store every call. Works with <strong>AWS S3</strong> or
+      <strong>Supabase Storage</strong> (S3-compatible).<br>
+      For Supabase: create a public bucket, then use endpoint <code>https://&lt;ref&gt;.supabase.co/storage/v1/s3</code>.<br>
+      Recordings require <strong>LiveKit Egress</strong> to be enabled on your LiveKit project.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="s-s3-key">Access Key ID</label>
+        <input type="text" id="s-s3-key" placeholder="AKIAIOSFODNN7EXAMPLE" />
+        <div id="cfg-s3-key" class="not-set-badge">Not configured</div>
+      </div>
+      <div>
+        <label for="s-s3-secret">Secret Access Key</label>
+        <div class="field-wrap">
+          <input type="password" id="s-s3-secret" placeholder="Leave blank to keep saved" autocomplete="new-password" />
+          <button type="button" class="eye-btn" onclick="toggleEye('s-s3-secret',this)">👁</button>
+        </div>
+        <div id="cfg-s3-secret" class="not-set-badge">Not configured</div>
+      </div>
+      <div>
+        <label for="s-s3-bucket">Bucket Name</label>
+        <input type="text" id="s-s3-bucket" placeholder="my-recordings-bucket" />
+      </div>
+      <div>
+        <label for="s-s3-region">Region</label>
+        <input type="text" id="s-s3-region" placeholder="us-east-1" />
+      </div>
+      <div>
+        <label for="s-s3-endpoint">Custom Endpoint</label>
+        <input type="text" id="s-s3-endpoint" placeholder="https://xxx.supabase.co/storage/v1/s3" />
+        <div class="field-note">Leave blank for AWS S3. Required for Supabase Storage.</div>
+      </div>
+    </div>
+    <div class="group-actions">
+      <button class="btn btn-green" onclick="saveGroup('s3')">💾 Save Storage Config</button>
+      <span class="group-save-status" id="gss-s3"></span>
+    </div>
+  </div>
+
+  <!-- ── Group 6: Cal.com ── -->
+  <div class="card settings-group" id="grp-calcom">
+    <div class="settings-group-title">
+      6. Cal.com Integration <span class="group-status" style="background:#33333318;color:#888;border:1px solid #333;font-size:.68rem;padding:2px 7px;border-radius:20px" id="gs-calcom">Optional</span>
+    </div>
+    <p style="font-size:.75rem;color:var(--text2);margin-bottom:.75rem">
+      Enables the AI to book and cancel appointments directly in your Cal.com calendar.<br>
+      Get your API key at <code>cal.com/settings/developer/api-keys</code>.
+      The Event Type ID is the number in your event URL: <code>cal.com/your-name/<strong>123</strong></code>.
+    </p>
+    <div class="field-row">
+      <div>
+        <label for="s-cal-key">Cal.com API Key <span style="color:var(--danger)">*</span></label>
+        <div class="field-wrap">
+          <input type="password" id="s-cal-key" placeholder="cal_live_..." autocomplete="new-password" />
+          <button type="button" class="eye-btn" onclick="toggleEye('s-cal-key',this)">👁</button>
+        </div>
+        <div id="cfg-cal-key" class="not-set-badge">Not configured</div>
+      </div>
+      <div>
+        <label for="s-cal-event">Event Type ID</label>
+        <input type="text" id="s-cal-event" placeholder="123456" />
+        <div class="field-note">From your Cal.com event URL</div>
+      </div>
+      <div>
+        <label for="s-cal-tz">Timezone</label>
+        <input type="text" id="s-cal-tz" placeholder="Asia/Kolkata" />
+      </div>
+    </div>
+    <div class="group-actions">
+      <button class="btn btn-green" onclick="saveGroup('calcom')">💾 Save Cal.com Config</button>
+      <span class="group-save-status" id="gss-calcom"></span>
+    </div>
+  </div>
+
+  <!-- ── Group 7: Tool Toggles ── -->
+  <div class="card settings-group" id="grp-tools">
+    <div class="settings-group-title">
+      7. Agent Tools — Enable / Disable
+    </div>
+    <p style="font-size:.75rem;color:var(--text2);margin-bottom:.75rem">
+      Toggle which capabilities the AI agent has during calls. Changes take effect on the next call.
+    </p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.5rem;margin-bottom:.75rem">
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-check_availability" checked style="accent-color:var(--accent)"> Check Availability
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-book_appointment" checked style="accent-color:var(--accent)"> Book Appointment (DB)
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-end_call" checked style="accent-color:var(--accent)"> End Call
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-transfer_to_human" checked style="accent-color:var(--accent)"> Transfer to Human
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-send_sms_confirmation" checked style="accent-color:var(--accent)"> Send SMS Confirmation
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-lookup_contact" checked style="accent-color:var(--accent)"> Lookup Contact (CRM)
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-remember_details" checked style="accent-color:var(--accent)"> Remember Key Details
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-book_calcom" checked style="accent-color:var(--accent)"> Book Cal.com Appointment
+      </label>
+      <label style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;cursor:pointer;padding:.4rem .6rem;border:1px solid var(--border);border-radius:5px">
+        <input type="checkbox" id="tool-cancel_calcom" checked style="accent-color:var(--accent)"> Cancel Cal.com Appointment
+      </label>
+    </div>
+    <div class="group-actions">
+      <button class="btn btn-green" onclick="saveToolToggles()">💾 Save Tool Settings</button>
+      <span class="group-save-status" id="gss-tools"></span>
     </div>
   </div>
 
@@ -695,6 +980,8 @@ function switchTab(name){
   if(name==='stats')       loadStats();
   if(name==='settings')    loadSettings();
   if(name==='errors')      loadLogs();
+  if(name==='crm')         loadCRM();
+  if(name==='campaigns')   loadCampaigns();
 }
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>switchTab(t.dataset.tab)));
 
@@ -719,6 +1006,31 @@ async function loadStats(){
     $('s-ni').textContent     = d.not_interested??0;
     $('s-rate').textContent   = (d.booking_rate_percent??0)+'%';
     $('s-dur').textContent    = d.avg_duration_seconds??0;
+  }catch(e){}
+  await loadLiveConfig();
+}
+
+async function loadLiveConfig(){
+  try{
+    const [cfg, promptData] = await Promise.all([api('/api/settings'), api('/api/prompt')]);
+    const v = k => (cfg[k]?.value) || '—';
+    const c = k => cfg[k]?.configured;
+
+    // Model — strip long suffixes for readability
+    const model = v('GEMINI_MODEL');
+    $('lc-model').textContent = model==='—'?'—':model.replace('gemini-','').replace('-preview','★').replace('-001','');
+    $('lc-model').title = model;
+
+    $('lc-voice').textContent  = v('GEMINI_TTS_VOICE');
+    $('lc-fwd').textContent    = v('DEFAULT_TRANSFER_NUMBER');
+    $('lc-did').textContent    = v('VOBIZ_OUTBOUND_NUMBER');
+    $('lc-trunk').textContent  = v('OUTBOUND_TRUNK_ID') !== '—' ? '✓ configured' : '⚠ not set';
+    $('lc-trunk').style.color  = v('OUTBOUND_TRUNK_ID') !== '—' ? 'var(--accent)' : 'var(--warn)';
+    $('lc-realtime').textContent = v('USE_GEMINI_REALTIME')==='false' ? 'Pipeline (Deepgram)' : 'Gemini Live';
+    $('lc-calcom').textContent = c('CALCOM_API_KEY') ? '✓ connected' : 'not configured';
+    $('lc-calcom').style.color = c('CALCOM_API_KEY') ? 'var(--accent)' : 'var(--muted)';
+    $('lc-prompt').textContent = promptData.is_custom ? 'Custom ✓' : 'Default';
+    $('lc-prompt').style.color = promptData.is_custom ? 'var(--accent)' : 'var(--muted)';
   }catch(e){}
 }
 
@@ -914,16 +1226,27 @@ const FIELD_MAP = {
   TWILIO_ACCOUNT_SID:    's-tw-sid',
   TWILIO_AUTH_TOKEN:     's-tw-token',
   TWILIO_FROM_NUMBER:    's-tw-from',
+  AWS_ACCESS_KEY_ID:     's-s3-key',
+  AWS_SECRET_ACCESS_KEY: 's-s3-secret',
+  AWS_BUCKET_NAME:       's-s3-bucket',
+  AWS_REGION:            's-s3-region',
+  S3_ENDPOINT:           's-s3-endpoint',
+  CALCOM_API_KEY:        's-cal-key',
+  CALCOM_EVENT_TYPE_ID:  's-cal-event',
+  CALCOM_TIMEZONE:       's-cal-tz',
 };
 
 // Keys whose configured status has a visible badge element
 const CFG_BADGES = {
-  LIVEKIT_API_KEY:    'cfg-lk-key',
-  LIVEKIT_API_SECRET: 'cfg-lk-secret',
-  GOOGLE_API_KEY:     'cfg-g-key',
-  VOBIZ_PASSWORD:     'cfg-v-pass',
-  TWILIO_ACCOUNT_SID: 'cfg-tw-sid',
-  TWILIO_AUTH_TOKEN:  'cfg-tw-token',
+  LIVEKIT_API_KEY:      'cfg-lk-key',
+  LIVEKIT_API_SECRET:   'cfg-lk-secret',
+  GOOGLE_API_KEY:       'cfg-g-key',
+  VOBIZ_PASSWORD:       'cfg-v-pass',
+  TWILIO_ACCOUNT_SID:   'cfg-tw-sid',
+  TWILIO_AUTH_TOKEN:    'cfg-tw-token',
+  AWS_ACCESS_KEY_ID:    'cfg-s3-key',
+  AWS_SECRET_ACCESS_KEY:'cfg-s3-secret',
+  CALCOM_API_KEY:       'cfg-cal-key',
 };
 
 // Group → required keys for "all configured" check
@@ -932,6 +1255,8 @@ const GROUP_REQUIRED = {
   google:  ['GOOGLE_API_KEY'],
   vobiz:   ['VOBIZ_SIP_DOMAIN','VOBIZ_USERNAME','VOBIZ_PASSWORD','OUTBOUND_TRUNK_ID'],
   twilio:  [],
+  s3:      [],
+  calcom:  [],
 };
 
 // Group → keys to send on save
@@ -940,6 +1265,8 @@ const GROUP_KEYS = {
   google:  ['GOOGLE_API_KEY','GEMINI_MODEL','GEMINI_TTS_VOICE'],
   vobiz:   ['VOBIZ_SIP_DOMAIN','VOBIZ_USERNAME','VOBIZ_PASSWORD','VOBIZ_OUTBOUND_NUMBER','OUTBOUND_TRUNK_ID','DEFAULT_TRANSFER_NUMBER'],
   twilio:  ['TWILIO_ACCOUNT_SID','TWILIO_AUTH_TOKEN','TWILIO_FROM_NUMBER'],
+  s3:      ['AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_BUCKET_NAME','AWS_REGION','S3_ENDPOINT'],
+  calcom:  ['CALCOM_API_KEY','CALCOM_EVENT_TYPE_ID','CALCOM_TIMEZONE'],
 };
 
 // Custom model input toggle
@@ -998,6 +1325,7 @@ async function loadSettings(){
     updateGroupStatuses(data);
 
   }catch(e){ console.error('loadSettings',e) }
+  await loadToolToggles();
 }
 
 function updateGroupStatuses(data){
@@ -1264,6 +1592,255 @@ $('clear-errors-btn').addEventListener('click', async () => {
     $('errors-tbody').innerHTML = '<tr><td colspan="5" class="empty">No logs yet.</td></tr>';
   } catch(e) { toast(e.message, 'err'); }
 });
+
+// ══════════════════════════════════════════════════════
+// CRM
+// ══════════════════════════════════════════════════════
+
+async function loadCRM(){
+  const tbody=$('crm-tbody');
+  try{
+    const d=await api('/api/crm');
+    const rows=d.data||[];
+    if(!rows.length){tbody.innerHTML='<tr><td colspan="7" class="empty">No contacts yet. Make some calls first.</td></tr>';return}
+    tbody.innerHTML=rows.map(c=>`<tr>
+      <td style="font-family:var(--mono)">${c.phone_number}</td>
+      <td>${c.lead_name||'—'}</td>
+      <td style="text-align:center">${c.total_calls}</td>
+      <td style="text-align:center">${c.booked?`<span style="color:var(--accent);font-weight:700">${c.booked}</span>`:'0'}</td>
+      <td style="font-size:.72rem">${fmtTs(c.last_call)}</td>
+      <td>${badge(c.last_outcome)}</td>
+      <td><button class="btn btn-ghost" style="font-size:.72rem;padding:.25rem .6rem" onclick="openCRMDetail('${esc(c.phone_number)}','${esc(c.lead_name||'')}')">View History</button></td>
+    </tr>`).join('');
+  }catch(e){tbody.innerHTML='<tr><td colspan="7" class="empty">Failed to load contacts.</td></tr>'}
+}
+
+window.openCRMDetail = async function(phone, name){
+  $('crm-detail-phone').textContent=phone;
+  $('crm-detail-name').textContent=name||'Unknown';
+  $('crm-detail').style.display='block';
+  $('crm-detail').scrollIntoView({behavior:'smooth',block:'start'});
+  const tbody=$('crm-calls-tbody');
+  tbody.innerHTML='<tr><td colspan="6" class="empty">Loading...</td></tr>';
+  try{
+    const d=await api('/api/crm/calls?phone='+encodeURIComponent(phone));
+    const calls=d.data||[];
+    if(!calls.length){tbody.innerHTML='<tr><td colspan="6" class="empty">No calls found.</td></tr>';return}
+    tbody.innerHTML=calls.map(c=>`<tr>
+      <td style="font-size:.72rem;white-space:nowrap">${fmtTs(c.timestamp)}</td>
+      <td>${badge(c.outcome)}</td>
+      <td>${c.duration_seconds!=null?c.duration_seconds+'s':'—'}</td>
+      <td class="trunc" style="max-width:160px" title="${esc(c.reason||'')}">${esc(c.reason)||'—'}</td>
+      <td style="min-width:180px">
+        <div style="display:flex;gap:.4rem;align-items:center">
+          <input type="text" id="note-${c.id}" value="${esc(c.notes||'')}" placeholder="Add note…"
+            style="flex:1;padding:.25rem .5rem;font-size:.75rem;background:#111;border:1px solid var(--border);color:var(--text);border-radius:4px;font-family:var(--sans)" />
+          <button class="btn btn-ghost" style="font-size:.68rem;padding:.2rem .5rem;white-space:nowrap"
+            onclick="saveNote('${c.id}')">Save</button>
+        </div>
+      </td>
+      <td>${c.recording_url
+        ?`<a href="${esc(c.recording_url)}" target="_blank" style="color:var(--accent2);font-size:.75rem;text-decoration:none">▶ Play</a>`
+        :'<span style="color:var(--muted);font-size:.72rem">—</span>'}</td>
+    </tr>`).join('');
+  }catch(e){tbody.innerHTML='<tr><td colspan="6" class="empty">Failed to load.</td></tr>'}
+};
+
+window.closeCRMDetail = function(){
+  $('crm-detail').style.display='none';
+};
+
+window.saveNote = async function(callId){
+  const inp=document.getElementById('note-'+callId);
+  if(!inp) return;
+  const notes=inp.value.trim();
+  try{
+    const r=await fetch(`/api/calls/${callId}/notes`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({notes})});
+    if(!r.ok) throw new Error((await r.json()).detail||r.statusText);
+    toast('Note saved.');
+  }catch(e){toast(e.message,'err')}
+};
+
+// ══════════════════════════════════════════════════════
+// Campaigns
+// ══════════════════════════════════════════════════════
+let campContacts = [];
+
+window.toggleCampForm = function(){
+  const f=$('camp-form'), t=$('camp-form-toggle');
+  const open = f.style.display==='block';
+  f.style.display = open?'none':'block';
+  t.textContent = open?'▼ expand':'▲ collapse';
+};
+
+window.onCampScheduleChange = function(){
+  const v=$('camp-schedule').value;
+  $('camp-time-wrap').style.display = v==='once'?'none':'block';
+};
+
+window.parseCampCSV = async function(){
+  const file=$('bc-file')||$('camp-file'); // reuse camp-file
+  const campFile=$('camp-file').files[0];
+  if(!campFile){showErr('camp-err','Select a CSV file first.');return}
+  const lines=(await campFile.text()).trim().split('\n').filter(l=>l.trim());
+  if(lines.length<2){showErr('camp-err','CSV needs header + at least 1 data row.');return}
+  const hdrs=lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/"/g,''));
+  const c=k=>hdrs.indexOf(k);
+  const pc=c('phone'),lc=c('lead_name'),bc=c('business_name'),sc=c('service_type');
+  if(pc===-1){showErr('camp-err','"phone" column not found.');return}
+  campContacts=lines.slice(1).map(line=>{
+    const cols=line.split(',').map(x=>x.trim().replace(/^"|"$/g,''));
+    return{phone:cols[pc]||'',lead_name:lc!==-1?cols[lc]:'there',
+      business_name:bc!==-1?cols[bc]:'our company',service_type:sc!==-1?cols[sc]:'our service'}
+  }).filter(r=>r.phone.startsWith('+'));
+  if(!campContacts.length){showErr('camp-err','No valid rows (phone must start with "+").');return}
+  $('camp-count').textContent=campContacts.length;
+  $('camp-preview-tbody').innerHTML=campContacts.slice(0,5).map((r,i)=>
+    `<tr><td>${i+1}</td><td>${r.phone}</td><td>${r.lead_name}</td><td>${r.business_name}</td></tr>`
+  ).join('')+(campContacts.length>5?`<tr><td colspan="4" class="empty">…and ${campContacts.length-5} more</td></tr>`:'');
+  $('camp-preview').style.display='block';
+  $('camp-create-btn').disabled=false;
+  toast(`${campContacts.length} contacts loaded.`);
+};
+
+window.createCampaign = async function(){
+  const name=$('camp-name').value.trim();
+  if(!name){showErr('camp-err','Campaign name is required.');return}
+  if(!campContacts.length){showErr('camp-err','Parse a CSV file first.');return}
+  const schedType=$('camp-schedule').value;
+  const schedTime=$('camp-time').value.trim()||'09:00';
+  const delay=Math.max(1,parseInt($('camp-delay').value)||3);
+  const usePrompt=$('camp-prompt-chk').checked;
+  const prompt=usePrompt?$('camp-prompt').value.trim()||null:null;
+  const btn=$('camp-create-btn');
+  btn.disabled=true; btn.textContent='Creating...';
+  try{
+    const r=await apiPost('/api/campaigns',{
+      name,contacts:campContacts,schedule_type:schedType,
+      schedule_time:schedTime,call_delay_seconds:delay,system_prompt:prompt
+    });
+    const d=await r.json();
+    if(!r.ok) throw new Error(d.detail||r.statusText);
+    const msg=schedType==='once'
+      ?`Campaign "${name}" created — dispatching ${campContacts.length} calls now!`
+      :`Campaign "${name}" scheduled (${schedType} at ${schedTime})`;
+    toast(msg);
+    resetCampForm();
+    loadCampaigns();
+  }catch(e){showErr('camp-err',e.message);toast(e.message,'err')}
+  finally{btn.disabled=false;btn.textContent='🚀 Create Campaign'}
+};
+
+window.resetCampForm = function(){
+  $('camp-name').value='';
+  $('camp-schedule').value='once';
+  $('camp-time-wrap').style.display='none';
+  $('camp-file').value='';
+  campContacts=[];
+  $('camp-preview').style.display='none';
+  $('camp-create-btn').disabled=true;
+  $('camp-prompt-chk').checked=false;
+  $('camp-prompt-area').style.display='none';
+  $('camp-prompt').value='';
+};
+
+async function loadCampaigns(){
+  const tbody=$('camp-tbody');
+  try{
+    const d=await api('/api/campaigns');
+    const rows=d.data||[];
+    if(!rows.length){tbody.innerHTML='<tr><td colspan="8" class="empty">No campaigns yet.</td></tr>';return}
+    tbody.innerHTML=rows.map(c=>{
+      const contacts=JSON.parse(c.contacts_json||'[]');
+      const sched=c.schedule_type==='once'?'Once'
+        :c.schedule_type==='daily'?`Daily ${c.schedule_time}`
+        :`Weekdays ${c.schedule_time}`;
+      const statusBadge=c.status==='active'?`<span class="badge b-booked">active</span>`
+        :c.status==='paused'?`<span class="badge b-voicemail">paused</span>`
+        :c.status==='completed'?`<span class="badge b-callback_requested">done</span>`
+        :`<span class="badge b-wrong_number">${c.status}</span>`;
+      const canToggle=c.schedule_type!=='once';
+      const toggleBtn=canToggle
+        ?(c.status==='paused'
+          ?`<button class="btn btn-ghost" style="font-size:.7rem;padding:.2rem .5rem" onclick="toggleCampaign('${c.id}','active')">▶ Resume</button>`
+          :`<button class="btn btn-ghost" style="font-size:.7rem;padding:.2rem .5rem" onclick="toggleCampaign('${c.id}','paused')">⏸ Pause</button>`)
+        :'';
+      return `<tr>
+        <td style="font-weight:600">${esc(c.name)}</td>
+        <td style="font-size:.75rem">${sched}</td>
+        <td style="text-align:center">${contacts.length}</td>
+        <td style="text-align:center;color:var(--accent)">${c.total_dispatched||0}</td>
+        <td style="text-align:center;color:var(--danger)">${c.total_failed||0}</td>
+        <td style="font-size:.72rem">${fmtTs(c.last_run_at)}</td>
+        <td>${statusBadge}</td>
+        <td style="display:flex;gap:.3rem;flex-wrap:wrap">
+          <button class="btn btn-green" style="font-size:.7rem;padding:.2rem .5rem" onclick="runCampaign('${c.id}','${esc(c.name)}')">▶ Run Now</button>
+          ${toggleBtn}
+          <button class="btn btn-red" onclick="deleteCampaign('${c.id}','${esc(c.name)}')">🗑</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }catch(e){tbody.innerHTML='<tr><td colspan="8" class="empty">Failed to load.</td></tr>'}
+}
+
+window.runCampaign = async function(id, name){
+  if(!confirm(`Run campaign "${name}" now?`)) return;
+  try{
+    const r=await apiPost(`/api/campaigns/${id}/run`,{});
+    const d=await r.json(); if(!r.ok) throw new Error(d.detail);
+    toast(`Campaign "${name}" dispatching ${d.contacts} calls…`);
+    setTimeout(loadCampaigns,2000);
+  }catch(e){toast(e.message,'err')}
+};
+
+window.toggleCampaign = async function(id, newStatus){
+  try{
+    const r=await fetch(`/api/campaigns/${id}/status`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:newStatus})});
+    const d=await r.json(); if(!r.ok) throw new Error(d.detail);
+    toast(`Campaign ${newStatus==='active'?'resumed':'paused'}.`);
+    loadCampaigns();
+  }catch(e){toast(e.message,'err')}
+};
+
+window.deleteCampaign = async function(id, name){
+  if(!confirm(`Delete campaign "${name}"? This cannot be undone.`)) return;
+  try{
+    const r=await apiDel(`/api/campaigns/${id}`); if(!r.ok){const d=await r.json();throw new Error(d.detail)}
+    toast(`Campaign "${name}" deleted.`);
+    loadCampaigns();
+  }catch(e){toast(e.message,'err')}
+};
+
+// ══════════════════════════════════════════════════════
+// Tool Toggles
+// ══════════════════════════════════════════════════════
+const ALL_TOOLS=['check_availability','book_appointment','end_call','transfer_to_human',
+  'send_sms_confirmation','lookup_contact','remember_details','book_calcom','cancel_calcom'];
+
+async function loadToolToggles(){
+  try{
+    const d=await api('/api/settings');
+    const info=d['ENABLED_TOOLS'];
+    if(info&&info.value){
+      const enabled=JSON.parse(info.value||'[]');
+      ALL_TOOLS.forEach(t=>{
+        const el=document.getElementById('tool-'+t);
+        if(el) el.checked=enabled.includes(t);
+      });
+    }
+    // else keep all checked (default)
+  }catch(e){}
+}
+
+window.saveToolToggles = async function(){
+  const enabled=ALL_TOOLS.filter(t=>{const el=document.getElementById('tool-'+t);return el&&el.checked});
+  try{
+    const r=await apiPost('/api/settings',{settings:{ENABLED_TOOLS:JSON.stringify(enabled)}});
+    const d=await r.json(); if(!r.ok) throw new Error(d.detail);
+    setGroupStatus('tools',`✓ Saved — ${enabled.length} tools enabled.`,'ok');
+    toast('Tool settings saved.');
+  }catch(e){setGroupStatus('tools',e.message,'err');toast(e.message,'err')}
+};
 
 // ══════════════════════════════════════════════════════
 // Init

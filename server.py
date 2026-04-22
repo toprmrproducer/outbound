@@ -2,22 +2,28 @@
 FastAPI backend for the outbound calling dashboard.
 
 Endpoints:
-  POST   /api/call                  — Dispatch a single outbound call
-  GET    /api/calls                 — Paginated call log
-  GET    /api/appointments          — All/filtered appointments
-  DELETE /api/appointments/{id}     — Cancel an appointment
-  GET    /api/stats                 — Aggregate stats
-  GET    /api/prompt                — Get saved system prompt
-  POST   /api/prompt                — Save system prompt
-  DELETE /api/prompt                — Reset to default
-  GET    /api/settings              — Get all saved API keys/config (secrets masked)
-  POST   /api/settings              — Save API keys/config (BYOK)
-  GET    /api/errors                — Get error log
-  DELETE /api/errors                — Clear error log
+  POST   /api/call                      — Dispatch a single outbound call
+  GET    /api/calls                     — Paginated call log
+  GET    /api/appointments              — All/filtered appointments
+  DELETE /api/appointments/{id}         — Cancel an appointment
+  GET    /api/stats                     — Aggregate stats
+  GET    /api/prompt                    — Get saved system prompt
+  POST   /api/prompt                    — Save system prompt
+  DELETE /api/prompt                    — Reset to default
+  GET    /api/settings                  — Get all saved API keys/config (secrets masked)
+  POST   /api/settings                  — Save API keys/config (BYOK)
+  GET    /api/errors                    — Get error log
+  DELETE /api/errors                    — Clear error log
+  POST   /api/campaigns                 — Create a campaign
+  GET    /api/campaigns                 — List all campaigns
+  DELETE /api/campaigns/{id}            — Delete a campaign
+  POST   /api/campaigns/{id}/run        — Dispatch campaign immediately
+  PATCH  /api/campaigns/{id}/status     — Pause / resume a campaign
 
 GET / serves the dashboard from ui/index.html.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -49,9 +55,15 @@ from db import (
     SENSITIVE_KEYS,
     cancel_appointment,
     clear_errors,
+    create_campaign,
+    delete_campaign,
     get_all_appointments,
     get_all_calls,
+    get_all_campaigns,
     get_all_settings,
+    get_calls_by_phone,
+    get_campaign,
+    get_contacts,
     get_errors,
     get_logs,
     get_setting,
@@ -60,6 +72,9 @@ from db import (
     log_error,
     save_settings,
     set_setting,
+    update_call_notes,
+    update_campaign_run_stats,
+    update_campaign_status,
 )
 from prompts import DEFAULT_SYSTEM_PROMPT
 
@@ -69,7 +84,31 @@ logger = logging.getLogger("server")
 
 init_db()
 
+# ---------------------------------------------------------------------------
+# APScheduler — campaign scheduler
+# ---------------------------------------------------------------------------
+try:
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+    _scheduler = AsyncIOScheduler()
+except ImportError:
+    _scheduler = None
+    logger.warning("APScheduler not installed — campaign scheduling disabled")
+
 app = FastAPI(title="Outbound Caller Dashboard", version="1.0.0")
+
+
+@app.on_event("startup")
+async def _startup():
+    if _scheduler:
+        _scheduler.start()
+        await _reschedule_all_campaigns()
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +139,155 @@ class PromptRequest(BaseModel):
 
 class SettingsRequest(BaseModel):
     settings: dict  # {KEY: value, ...}  — empty string = "don't overwrite"
+
+
+class NotesRequest(BaseModel):
+    notes: str
+
+
+class CampaignRequest(BaseModel):
+    name: str
+    contacts: list           # [{phone, lead_name, business_name, service_type}, ...]
+    schedule_type: str = "once"   # once | daily | weekdays
+    schedule_time: str = "09:00"  # HH:MM
+    call_delay_seconds: int = 3
+    system_prompt: Optional[str] = None
+
+
+class StatusRequest(BaseModel):
+    status: str  # active | paused
+
+
+# ---------------------------------------------------------------------------
+# Campaign runner helpers
+# ---------------------------------------------------------------------------
+
+async def _dispatch_one(lk, lk_api, contact: dict, room_name: str, prompt: Optional[str]) -> bool:
+    """Dispatch a single call from a campaign. Returns True on success."""
+    try:
+        saved_prompt = prompt or (await get_setting("system_prompt", "")) or None
+        metadata = {
+            "phone_number": contact["phone"],
+            "lead_name": contact.get("lead_name", "there"),
+            "business_name": contact.get("business_name", "our company"),
+            "service_type": contact.get("service_type", "our service"),
+            "system_prompt": saved_prompt,
+        }
+        await lk.agent_dispatch.create_dispatch(
+            lk_api.CreateAgentDispatchRequest(
+                agent_name="outbound-caller",
+                room=room_name,
+                metadata=json.dumps(metadata),
+            )
+        )
+        return True
+    except Exception as exc:
+        logger.error("Campaign dispatch error for %s: %s", contact.get("phone"), exc)
+        return False
+
+
+async def _run_campaign(campaign_id: str) -> None:
+    """Background task: dispatch all calls for a campaign sequentially."""
+    campaign = await get_campaign(campaign_id)
+    if not campaign:
+        logger.error("Campaign not found: %s", campaign_id)
+        return
+
+    contacts = json.loads(campaign.get("contacts_json") or "[]")
+    if not contacts:
+        logger.warning("Campaign %s has no contacts", campaign_id)
+        return
+
+    delay = int(campaign.get("call_delay_seconds") or 3)
+    prompt = campaign.get("system_prompt")
+
+    url    = await eff("LIVEKIT_URL")
+    key    = await eff("LIVEKIT_API_KEY")
+    secret = await eff("LIVEKIT_API_SECRET")
+    if not (url and key and secret):
+        logger.error("Campaign %s: LiveKit not configured", campaign_id)
+        return
+
+    from livekit import api as lk_api_module
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ctx))
+
+    ok_count = 0
+    fail_count = 0
+    try:
+        lk = lk_api_module.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session)
+        for i, contact in enumerate(contacts):
+            phone = contact.get("phone", "")
+            if not phone.startswith("+"):
+                fail_count += 1
+                continue
+            room_name = f"camp-{campaign_id[:8]}-{phone.replace('+','')}-{random.randint(100,999)}"
+            success = await _dispatch_one(lk, lk_api_module, contact, room_name, prompt)
+            if success:
+                ok_count += 1
+            else:
+                fail_count += 1
+            if i < len(contacts) - 1:
+                await asyncio.sleep(delay)
+        await lk.aclose()
+    except Exception as exc:
+        logger.error("Campaign run error: %s", exc)
+    finally:
+        await session.close()
+
+    await update_campaign_run_stats(campaign_id, ok_count, fail_count)
+    await log_error(
+        "server",
+        f"Campaign '{campaign.get('name')}' run complete: {ok_count} dispatched, {fail_count} failed",
+        level="info",
+    )
+    logger.info("Campaign %s done: %d dispatched, %d failed", campaign_id, ok_count, fail_count)
+
+
+async def _reschedule_all_campaigns() -> None:
+    """Load all active daily/weekday campaigns and register APScheduler jobs."""
+    if not _scheduler:
+        return
+    try:
+        campaigns = await get_all_campaigns()
+        for c in campaigns:
+            if c["status"] == "active" and c["schedule_type"] in ("daily", "weekdays"):
+                _upsert_scheduler_job(c)
+    except Exception as exc:
+        logger.warning("Could not reschedule campaigns: %s", exc)
+
+
+def _upsert_scheduler_job(campaign: dict) -> None:
+    if not _scheduler:
+        return
+    job_id = f"campaign_{campaign['id']}"
+    # Remove existing job if any
+    if _scheduler.get_job(job_id):
+        _scheduler.remove_job(job_id)
+    if campaign["status"] != "active":
+        return
+
+    time_parts = (campaign.get("schedule_time") or "09:00").split(":")
+    hour   = int(time_parts[0]) if len(time_parts) > 0 else 9
+    minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+
+    if campaign["schedule_type"] == "daily":
+        trigger = CronTrigger(hour=hour, minute=minute)
+    elif campaign["schedule_type"] == "weekdays":
+        trigger = CronTrigger(day_of_week="mon-fri", hour=hour, minute=minute)
+    else:
+        return
+
+    _scheduler.add_job(
+        _run_campaign,
+        trigger=trigger,
+        args=[campaign["id"]],
+        id=job_id,
+        replace_existing=True,
+    )
+    logger.info("Scheduled campaign '%s' (%s) at %02d:%02d", campaign["name"], campaign["schedule_type"], hour, minute)
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +492,108 @@ async def api_get_stats():
 
 
 # ---------------------------------------------------------------------------
+# CRM
+# ---------------------------------------------------------------------------
+
+@app.get("/api/crm")
+async def api_get_contacts():
+    return {"data": await get_contacts()}
+
+
+@app.get("/api/crm/calls")
+async def api_get_contact_calls(phone: str = Query(...)):
+    return {"data": await get_calls_by_phone(phone)}
+
+
+@app.patch("/api/calls/{call_id}/notes")
+async def api_update_notes(call_id: str, req: NotesRequest):
+    ok = await update_call_notes(call_id, req.notes)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Call not found")
+    return {"status": "updated"}
+
+
+# ---------------------------------------------------------------------------
+# Campaigns
+# ---------------------------------------------------------------------------
+
+@app.post("/api/campaigns")
+async def api_create_campaign(req: CampaignRequest):
+    """Create a new outbound campaign."""
+    if not req.contacts:
+        raise HTTPException(400, "contacts list cannot be empty")
+    if req.schedule_type not in ("once", "daily", "weekdays"):
+        raise HTTPException(400, "schedule_type must be one of: once, daily, weekdays")
+
+    contacts_json = json.dumps(req.contacts)
+    campaign_id = await create_campaign(
+        name=req.name,
+        contacts_json=contacts_json,
+        schedule_type=req.schedule_type,
+        schedule_time=req.schedule_time,
+        call_delay_seconds=req.call_delay_seconds,
+        system_prompt=req.system_prompt,
+    )
+
+    campaign = await get_campaign(campaign_id)
+
+    if req.schedule_type == "once":
+        # Run immediately as a background task
+        asyncio.create_task(_run_campaign(campaign_id))
+    else:
+        # Register scheduler job for daily/weekday campaigns
+        if campaign:
+            _upsert_scheduler_job(campaign)
+
+    return {"status": "created", "id": campaign_id, "will_run": req.schedule_type == "once"}
+
+
+@app.get("/api/campaigns")
+async def api_list_campaigns():
+    campaigns = await get_all_campaigns()
+    return {"data": campaigns}
+
+
+@app.delete("/api/campaigns/{campaign_id}")
+async def api_delete_campaign(campaign_id: str):
+    # Remove from scheduler if present
+    if _scheduler:
+        job_id = f"campaign_{campaign_id}"
+        if _scheduler.get_job(job_id):
+            _scheduler.remove_job(job_id)
+    ok = await delete_campaign(campaign_id)
+    if not ok:
+        raise HTTPException(404, "Campaign not found")
+    return {"status": "deleted"}
+
+
+@app.post("/api/campaigns/{campaign_id}/run")
+async def api_run_campaign(campaign_id: str):
+    """Dispatch a campaign immediately (run now), regardless of its schedule."""
+    campaign = await get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    asyncio.create_task(_run_campaign(campaign_id))
+    return {"status": "running", "contacts": len(json.loads(campaign.get("contacts_json") or "[]"))}
+
+
+@app.patch("/api/campaigns/{campaign_id}/status")
+async def api_campaign_status(campaign_id: str, req: StatusRequest):
+    """Pause or resume a scheduled campaign."""
+    if req.status not in ("active", "paused"):
+        raise HTTPException(400, "status must be 'active' or 'paused'")
+    ok = await update_campaign_status(campaign_id, req.status)
+    if not ok:
+        raise HTTPException(404, "Campaign not found")
+
+    campaign = await get_campaign(campaign_id)
+    if campaign:
+        _upsert_scheduler_job(campaign)  # re-register or remove scheduler job
+
+    return {"status": req.status}
+
+
+# ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
 
@@ -353,6 +643,9 @@ async def api_save_settings(req: SettingsRequest):
         "VOBIZ_SIP_DOMAIN", "VOBIZ_USERNAME", "VOBIZ_PASSWORD",
         "VOBIZ_OUTBOUND_NUMBER", "OUTBOUND_TRUNK_ID", "DEFAULT_TRANSFER_NUMBER",
         "TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER",
+        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_BUCKET_NAME", "AWS_REGION", "S3_ENDPOINT",
+        "CALCOM_API_KEY", "CALCOM_EVENT_TYPE_ID", "CALCOM_TIMEZONE",
+        "ENABLED_TOOLS", "DEEPGRAM_API_KEY",
     }
     filtered = {k: v for k, v in req.settings.items() if k in ALLOWED_KEYS}
     if not filtered:

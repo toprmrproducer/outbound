@@ -20,6 +20,13 @@ httpx>=0.25.0                       # Async HTTP client (used by supabase)
 # ── Config & utilities ────────────────────────────────────────────────────
 python-dotenv>=1.0.0                # Load .env file into os.environ
 
+# ── Scheduling ────────────────────────────────────────────────────────────
+apscheduler>=3.10.0                 # Campaign scheduler (daily/weekday morning calls)
+
+# ── Google Calendar integration (optional) ────────────────────────────────
+google-api-python-client>=2.100.0   # Google Calendar API client
+google-auth-oauthlib>=1.0.0         # OAuth2 for Google Calendar service accounts
+
 # ── Optional: SMS confirmations ──────────────────────────────────────────
 # Remove this line if you don't need Twilio SMS (keeps the install lighter)
 twilio>=8.0.0                       # Twilio REST client for SMS confirmation

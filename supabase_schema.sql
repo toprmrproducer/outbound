@@ -42,3 +42,37 @@ ALTER TABLE appointments  DISABLE ROW LEVEL SECURITY;
 ALTER TABLE call_logs     DISABLE ROW LEVEL SECURITY;
 ALTER TABLE settings      DISABLE ROW LEVEL SECURITY;
 ALTER TABLE error_logs    DISABLE ROW LEVEL SECURITY;
+
+-- Migration: add recording URL and notes to call logs
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS recording_url TEXT;
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS notes TEXT;
+
+-- Campaigns table — mass calling with scheduling
+CREATE TABLE IF NOT EXISTS campaigns (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',        -- draft | active | paused | completed
+    contacts_json TEXT NOT NULL DEFAULT '[]',     -- JSON array of contact objects
+    schedule_type TEXT NOT NULL DEFAULT 'once',   -- once | daily | weekdays
+    schedule_time TEXT DEFAULT '09:00',           -- HH:MM (24h) — used for daily/weekdays
+    call_delay_seconds INTEGER DEFAULT 3,
+    system_prompt TEXT,
+    created_at TEXT NOT NULL,
+    last_run_at TEXT,
+    total_dispatched INTEGER DEFAULT 0,
+    total_failed INTEGER DEFAULT 0
+);
+ALTER TABLE campaigns DISABLE ROW LEVEL SECURITY;
+
+-- Cal.com booking tracking
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS calcom_booking_uid TEXT;
+
+-- Contact memory — AI-extracted key insights per person
+CREATE TABLE IF NOT EXISTS contact_memory (
+    id TEXT PRIMARY KEY,
+    phone_number TEXT NOT NULL,
+    insight TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+ALTER TABLE contact_memory DISABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_contact_memory_phone ON contact_memory (phone_number);

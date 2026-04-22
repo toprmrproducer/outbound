@@ -7,7 +7,11 @@ from typing import Optional
 from livekit import agents, api
 from livekit.agents import llm
 
-from db import check_slot, get_next_available, insert_appointment, log_call, log_error
+from db import (
+    check_slot, get_next_available, insert_appointment, log_call, log_error,
+    get_calls_by_phone, get_appointments_by_phone,
+    add_contact_memory, get_contact_memory, compress_contact_memory,
+)
 
 logger = logging.getLogger("appointment-tools")
 
@@ -33,7 +37,39 @@ class AppointmentTools(llm.ToolContext):
         self.lead_name = lead_name
         self._call_start_time = time.time()
         self._sip_domain = os.getenv("VOBIZ_SIP_DOMAIN", "")
+        self.recording_url: Optional[str] = None
         super().__init__(tools=[])
+
+    # Tool registry — name → method
+    _TOOL_REGISTRY = {
+        "check_availability":    "check_availability",
+        "book_appointment":      "book_appointment",
+        "end_call":              "end_call",
+        "transfer_to_human":     "transfer_to_human",
+        "send_sms_confirmation": "send_sms_confirmation",
+        "lookup_contact":        "lookup_contact",
+        "remember_details":      "remember_details",
+        "book_calcom":           "book_calcom",
+        "cancel_calcom":         "cancel_calcom",
+    }
+
+    def build_tool_list(self, enabled: list) -> list:
+        """Return tool methods filtered by the enabled list. Empty list = all enabled."""
+        all_methods = [
+            self.check_availability,
+            self.book_appointment,
+            self.end_call,
+            self.transfer_to_human,
+            self.send_sms_confirmation,
+            self.lookup_contact,
+            self.remember_details,
+            self.book_calcom,
+            self.cancel_calcom,
+        ]
+        if not enabled:
+            return all_methods
+        name_map = {m.__name__: m for m in all_methods}
+        return [name_map[n] for n in enabled if n in name_map]
 
     @property
     def all_tools(self) -> list:
@@ -43,6 +79,10 @@ class AppointmentTools(llm.ToolContext):
             self.end_call,
             self.transfer_to_human,
             self.send_sms_confirmation,
+            self.lookup_contact,
+            self.remember_details,
+            self.book_calcom,
+            self.cancel_calcom,
         ]
 
     # ------------------------------------------------------------------ #
@@ -127,6 +167,7 @@ class AppointmentTools(llm.ToolContext):
                 outcome=outcome,
                 reason=reason,
                 duration_seconds=duration,
+                recording_url=self.recording_url,
             )
         except Exception as exc:
             logger.error("Failed to log call outcome: %s", exc)
@@ -230,3 +271,213 @@ class AppointmentTools(llm.ToolContext):
         except Exception as exc:
             logger.error("SMS send failed: %s", exc)
             return "SMS delivery failed, but your booking is confirmed in our system."
+
+    # ------------------------------------------------------------------ #
+    #  Tool 6: lookup_contact                                              #
+    # ------------------------------------------------------------------ #
+
+    @llm.function_tool
+    async def lookup_contact(self, phone: str) -> str:
+        """
+        Look up a contact's full history from the database before engaging in conversation.
+        Call this at the start of a call (or any time) to understand the lead's background:
+        previous call outcomes, existing appointments, and any notes left by the team.
+        phone: the lead's phone number with country code
+        Returns a structured summary of the contact's history.
+        """
+        try:
+            calls = await get_calls_by_phone(phone)
+            appointments = await get_appointments_by_phone(phone)
+            await _log(f"Tool: lookup_contact({phone}) — {len(calls)} calls, {len(appointments)} appointments")
+
+            if not calls and not appointments:
+                return f"No history found for {phone}. This appears to be a first-time contact."
+
+            lines = [f"Contact history for {phone}:"]
+
+            # Remembered details (highest priority — show first)
+            memories = await get_contact_memory(phone)
+            if memories:
+                lines.append(f"\nREMEMBERED DETAILS ({len(memories)} entries):")
+                for m in memories[:10]:
+                    lines.append(f"  • {m['insight']}")
+
+            if calls:
+                lines.append(f"\nCALL HISTORY ({len(calls)} calls):")
+                for c in calls[:5]:
+                    ts = (c.get("timestamp") or "")[:16]
+                    outcome = c.get("outcome", "unknown")
+                    reason = c.get("reason", "")
+                    notes = c.get("notes", "")
+                    line = f"  • {ts} — outcome: {outcome}"
+                    if reason:
+                        line += f", reason: {reason}"
+                    if notes:
+                        line += f", notes: {notes}"
+                    lines.append(line)
+                if len(calls) > 5:
+                    lines.append(f"  … and {len(calls)-5} more calls")
+
+            if appointments:
+                lines.append(f"\nAPPOINTMENTS ({len(appointments)}):")
+                for a in appointments[:3]:
+                    status = a.get("status", "unknown")
+                    lines.append(f"  • {a.get('date')} {a.get('time')} — {a.get('service')} [{status}]")
+
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.error("lookup_contact error: %s", exc)
+            return "Unable to retrieve contact history right now."
+
+    # ------------------------------------------------------------------ #
+    #  Tool 7: remember_details                                            #
+    # ------------------------------------------------------------------ #
+
+    @llm.function_tool
+    async def remember_details(self, insight: str) -> str:
+        """
+        Store a key insight or detail about this person for future calls.
+        Call this whenever you learn something useful about the lead:
+        their preferences, objections, family situation, interest level,
+        best time to call, or any other detail that will help future conversations.
+        Examples:
+          "Prefers morning calls, before 10am"
+          "Has 2 kids, interested in family dental plan"
+          "Said she will discuss with husband and wants callback in 2 weeks"
+          "Very interested in the premium package, budget is ₹5000/month"
+        insight: the key detail to remember (plain text)
+        Returns confirmation.
+        """
+        if not self.phone_number:
+            return "Cannot remember detail — no phone number for this call."
+        try:
+            await add_contact_memory(self.phone_number, insight)
+            await _log(f"Tool: remember_details({self.phone_number}) — {insight[:60]}")
+
+            # After saving, check if we have many entries and compress them
+            memories = await get_contact_memory(self.phone_number)
+            if len(memories) >= 5:
+                asyncio.create_task(self._compress_memories())
+
+            return f"Remembered: {insight}"
+        except Exception as exc:
+            logger.error("remember_details error: %s", exc)
+            return "Could not save the detail right now."
+
+    async def _compress_memories(self) -> None:
+        """Use Gemini Flash to compress multiple memory entries into a concise profile."""
+        try:
+            memories = await get_contact_memory(self.phone_number)
+            if len(memories) < 5:
+                return
+            import google.generativeai as genai
+            api_key = os.getenv("GOOGLE_API_KEY", "")
+            if not api_key:
+                return
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            bullet_list = "\n".join(f"- {m['insight']}" for m in memories)
+            prompt = (
+                f"Compress these notes about a sales contact into a concise 3-5 bullet profile. "
+                f"Keep all key facts. Be terse.\n\n{bullet_list}"
+            )
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, lambda: model.generate_content(prompt))
+            compressed = response.text.strip()
+            if compressed:
+                await compress_contact_memory(self.phone_number, compressed)
+                logger.info("Compressed memories for %s", self.phone_number)
+        except Exception as exc:
+            logger.warning("Memory compression failed: %s", exc)
+
+    # ------------------------------------------------------------------ #
+    #  Tool 8: book_calcom                                                 #
+    # ------------------------------------------------------------------ #
+
+    @llm.function_tool
+    async def book_calcom(
+        self,
+        name: str,
+        email: str,
+        date: str,
+        start_time: str,
+        notes: str = "",
+    ) -> str:
+        """
+        Book an appointment in Cal.com calendar.
+        Call AFTER book_appointment succeeds to sync with the team's Cal.com calendar.
+        name: lead's full name
+        email: lead's email address (required by Cal.com)
+        date: YYYY-MM-DD
+        start_time: HH:MM (24-hour)
+        notes: any special notes for the appointment
+        Returns the Cal.com booking UID or an error.
+        """
+        api_key = os.getenv("CALCOM_API_KEY", "")
+        event_type_id = os.getenv("CALCOM_EVENT_TYPE_ID", "")
+        timezone = os.getenv("CALCOM_TIMEZONE", "Asia/Kolkata")
+        if not api_key or not event_type_id:
+            return "Cal.com not configured — skipping calendar booking. Add CALCOM_API_KEY and CALCOM_EVENT_TYPE_ID in Settings."
+
+        try:
+            from datetime import datetime as _dt
+            start_dt = _dt.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M")
+            start_iso = start_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    "https://api.cal.com/v1/bookings",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "eventTypeId": int(event_type_id),
+                        "start": start_iso,
+                        "timeZone": timezone,
+                        "responses": {"name": name, "email": email, "notes": notes},
+                        "metadata": {"source": "OutboundAI"},
+                        "language": "en",
+                    },
+                )
+            data = resp.json()
+            if resp.status_code not in (200, 201):
+                raise ValueError(data.get("message") or str(data))
+
+            uid = data.get("uid", "")
+            await _log(f"Tool: book_calcom → uid={uid} for {name}")
+            return f"Cal.com appointment booked. Booking UID: {uid}"
+        except Exception as exc:
+            logger.error("book_calcom error: %s", exc)
+            return f"Cal.com booking failed: {exc}"
+
+    # ------------------------------------------------------------------ #
+    #  Tool 9: cancel_calcom                                               #
+    # ------------------------------------------------------------------ #
+
+    @llm.function_tool
+    async def cancel_calcom(self, booking_uid: str, reason: str = "") -> str:
+        """
+        Cancel a Cal.com appointment by its booking UID.
+        Use the UID returned by book_calcom.
+        booking_uid: the Cal.com booking UID to cancel
+        reason: optional cancellation reason
+        Returns confirmation or an error.
+        """
+        api_key = os.getenv("CALCOM_API_KEY", "")
+        if not api_key:
+            return "Cal.com not configured — cannot cancel."
+
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.delete(
+                    f"https://api.cal.com/v1/bookings/{booking_uid}",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    params={"reason": reason} if reason else {},
+                )
+            if resp.status_code not in (200, 204):
+                raise ValueError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            await _log(f"Tool: cancel_calcom → cancelled uid={booking_uid}")
+            return f"Cal.com appointment {booking_uid} cancelled successfully."
+        except Exception as exc:
+            logger.error("cancel_calcom error: %s", exc)
+            return f"Cal.com cancellation failed: {exc}"

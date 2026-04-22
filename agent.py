@@ -53,7 +53,7 @@ from livekit import agents, api
 from livekit.agents import Agent, AgentSession, RoomInputOptions
 from livekit.plugins import noise_cancellation, silero
 
-from db import init_db, log_error
+from db import init_db, log_error, get_enabled_tools
 from prompts import build_prompt
 from tools import AppointmentTools
 
@@ -157,6 +157,13 @@ def _build_session(tools: list, system_prompt: str) -> AgentSession:
       1. google.realtime.RealtimeModel  (single-API Gemini Live audio)
       2. google.beta.realtime.RealtimeModel  (same, older package naming)
       3. Deepgram STT + google.LLM + google.TTS  (pipeline fallback)
+
+    Silence-prevention config applied to all Live sessions:
+      - session_resumption(transparent=True): auto-resumes after timeout instead of going silent
+      - context_window_compression: compresses old turns with a sliding window instead of
+        hitting the token limit and freezing
+      - realtime_input_config: less aggressive end-of-speech VAD so Gemini doesn't end
+        turns prematurely and stop listening
     """
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-live-001")
     gemini_voice = os.getenv("GEMINI_TTS_VOICE", "Aoede")
@@ -168,12 +175,52 @@ def _build_session(tools: list, system_prompt: str) -> AgentSession:
         logger.info(
             "SESSION MODE: Gemini Live realtime (%s, voice=%s)", gemini_model, gemini_voice
         )
+        # Gemini 3.1 Live doesn't support generate_reply — attach Deepgram TTS
+        # so session.say() works for the scripted opening line.
+        extra_tts = None
+        if "3.1" in gemini_model and _deepgram_stt:
+            try:
+                from livekit.plugins import deepgram as _dg
+                extra_tts = _dg.TTS()
+                logger.info("Deepgram TTS attached for Gemini 3.1 initial greeting")
+            except Exception as _e:
+                logger.warning("Could not load Deepgram TTS: %s", _e)
+
+        # Build silence-prevention configs
+        try:
+            from google.genai import types as _gt
+            _realtime_input_cfg = _gt.RealtimeInputConfig(
+                automatic_activity_detection=_gt.AutomaticActivityDetection(
+                    end_of_speech_sensitivity=_gt.EndSensitivity.LOW,
+                    silence_duration_ms=2000,   # 2 s silence before ending turn
+                    prefix_padding_ms=200,
+                ),
+            )
+            _session_resumption_cfg = _gt.SessionResumptionConfig(transparent=True)
+            _ctx_compression_cfg = _gt.ContextWindowCompressionConfig(
+                trigger_tokens=25600,
+                sliding_window=_gt.SlidingWindow(target_tokens=12800),
+            )
+            logger.info("Silence-prevention config applied (VAD LOW, transparent resumption, context compression)")
+        except Exception as _cfg_err:
+            logger.warning("Could not build silence-prevention config: %s", _cfg_err)
+            _realtime_input_cfg = None
+            _session_resumption_cfg = None
+            _ctx_compression_cfg = None
+
+        realtime_kwargs: dict = dict(
+            model=gemini_model,
+            voice=gemini_voice,
+            instructions=system_prompt,
+        )
+        if _realtime_input_cfg is not None:
+            realtime_kwargs["realtime_input_config"]      = _realtime_input_cfg
+            realtime_kwargs["session_resumption"]         = _session_resumption_cfg
+            realtime_kwargs["context_window_compression"] = _ctx_compression_cfg
+
         return AgentSession(
-            llm=RealtimeClass(
-                model=gemini_model,
-                voice=gemini_voice,
-                instructions=system_prompt,
-            ),
+            llm=RealtimeClass(**realtime_kwargs),
+            tts=extra_tts,
             tools=tools,
         )
 
@@ -258,34 +305,20 @@ async def entrypoint(ctx: agents.JobContext) -> None:
         custom_prompt=custom_prompt,
     )
 
-    # ------------------------------------------------------------------
-    # Build tools and session
-    # ------------------------------------------------------------------
     tool_ctx = AppointmentTools(ctx, phone_number, lead_name)
-
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-live-001")
-    await _log("info", f"Building AI session — model={gemini_model}")
-
-    session = _build_session(tools=tool_ctx.all_tools, system_prompt=system_prompt)
+    enabled_tools = await get_enabled_tools()  # [] = all tools enabled
 
     # ------------------------------------------------------------------
-    # Connect to room and start session
+    # Connect to LiveKit room
     # ------------------------------------------------------------------
     await ctx.connect()
     await _log("info", f"Connected to LiveKit room: {ctx.room.name}")
 
-    await session.start(
-        room=ctx.room,
-        agent=OutboundAssistant(instructions=system_prompt),
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVCTelephony(),
-            close_on_disconnect=True,
-        ),
-    )
-    await _log("info", "Agent session started — AI ready")
-
     # ------------------------------------------------------------------
-    # Outbound SIP dial
+    # Outbound SIP dial — MUST happen before starting Gemini Live.
+    # Gemini Live has a short idle timeout; if we start it before the
+    # call is answered (~20-30s ring time) the session crashes silently
+    # and generate_reply() raises "AgentSession isn't running".
     # ------------------------------------------------------------------
     if phone_number:
         trunk_id = os.getenv("OUTBOUND_TRUNK_ID")
@@ -305,22 +338,100 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                     wait_until_answered=True,
                 )
             )
-            await _log("info", f"Call ANSWERED — {phone_number} picked up, agent speaking now")
-
-            await session.generate_reply(
-                instructions=(
-                    f"The call just connected. Greet the lead and ask if you're speaking "
-                    f"with {lead_name}, as per your instructions."
-                )
-            )
-
         except Exception as exc:
             await _log("error", f"SIP dial FAILED for {phone_number}: {exc}",
                        f"trunk_id={trunk_id} room={ctx.room.name}")
             ctx.shutdown()
+            return
+
+        await _log("info", f"Call ANSWERED — {phone_number} picked up, starting AI session now")
+
+    # ------------------------------------------------------------------
+    # Build and start Gemini Live session AFTER the call is answered
+    # ------------------------------------------------------------------
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-live-001")
+    await _log("info", f"Building AI session — model={gemini_model}")
+    active_tools = tool_ctx.build_tool_list(enabled_tools)
+    await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
+    session = _build_session(tools=active_tools, system_prompt=system_prompt)
+
+    await session.start(
+        room=ctx.room,
+        agent=OutboundAssistant(instructions=system_prompt),
+        room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVCTelephony(),
+            close_on_disconnect=True,
+        ),
+    )
+    await _log("info", "Agent session started — AI ready, generating greeting")
+
+    # ------------------------------------------------------------------
+    # Optional egress recording (only if S3 configured)
+    # ------------------------------------------------------------------
+    if phone_number:
+        _aws_key    = os.getenv("AWS_ACCESS_KEY_ID", "")
+        _aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+        _aws_bucket = os.getenv("AWS_BUCKET_NAME", "")
+        if _aws_key and _aws_secret and _aws_bucket:
+            try:
+                _recording_path = f"recordings/{ctx.room.name}.ogg"
+                _egress_req = api.RoomCompositeEgressRequest(
+                    room_name=ctx.room.name,
+                    audio_only=True,
+                    file_outputs=[
+                        api.EncodedFileOutput(
+                            file_type=api.EncodedFileType.OGG,
+                            filepath=_recording_path,
+                            s3=api.S3Upload(
+                                access_key=_aws_key,
+                                secret=_aws_secret,
+                                bucket=_aws_bucket,
+                                region=os.getenv("AWS_REGION", "us-east-1"),
+                                endpoint=os.getenv("S3_ENDPOINT", ""),
+                            ),
+                        )
+                    ],
+                )
+                _egress = await ctx.api.egress.start_room_composite_egress(_egress_req)
+                _s3_ep = os.getenv("S3_ENDPOINT", "").rstrip("/")
+                tool_ctx.recording_url = (
+                    f"{_s3_ep}/{_aws_bucket}/{_recording_path}"
+                    if _s3_ep
+                    else f"s3://{_aws_bucket}/{_recording_path}"
+                )
+                await _log("info", f"Recording started: egress={_egress.egress_id}")
+            except Exception as _exc:
+                await _log("warning", f"Recording start failed (non-fatal): {_exc}")
+
+    # ------------------------------------------------------------------
+    # Greet — gemini-3.1-flash-live silently ignores generate_reply
+    # (the livekit plugin hasn't implemented it yet).  We detect this
+    # by model name and call session.say() with a scripted line instead.
+    # ------------------------------------------------------------------
+    _model_for_greeting = os.getenv("GEMINI_MODEL", "")
+    _use_say = "3.1" in _model_for_greeting  # 3.1 Live doesn't support generate_reply
+
+    if _use_say:
+        await _log("info", "Using say() for initial greeting (3.1 model)")
+        try:
+            await session.say(
+                f"Hello! Am I speaking with {lead_name}? "
+                f"This is Priya calling from {business_name}. "
+                f"I'm reaching out about {service_type}. Do you have a moment?"
+            )
+        except Exception as _say_exc:
+            await _log("warning", f"say() failed: {_say_exc}")
     else:
-        await _log("info", "No phone_number in metadata — treating as inbound/web call")
-        await session.generate_reply(instructions="Greet the caller warmly.")
+        greeting_instructions = (
+            f"The call just connected. Greet the lead and ask if you're speaking "
+            f"with {lead_name}, as per your instructions."
+            if phone_number
+            else "Greet the caller warmly."
+        )
+        try:
+            await session.generate_reply(instructions=greeting_instructions)
+        except Exception as _gr_exc:
+            await _log("warning", f"generate_reply failed: {_gr_exc}")
 
 
 # ---------------------------------------------------------------------------
