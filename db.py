@@ -13,7 +13,7 @@ DEFAULTS = {
     "LIVEKIT_API_KEY":         "API4MSqHSSyiVdh",
     "LIVEKIT_API_SECRET":      "pG6TNGyYfi2djbRgxo8g1fky7DoI2C5w8nHSUFqxRjg",
     "GOOGLE_API_KEY":          "AIzaSyB9jUcS1xhEykGj9P3pGLndxHP3zyW-VOw",
-    "GEMINI_MODEL":            "gemini-2.0-flash-live-001",
+    "GEMINI_MODEL":            "gemini-live-2.5-flash-native-audio",
     "GEMINI_TTS_VOICE":        "Aoede",
     "USE_GEMINI_REALTIME":     "true",
     "VOBIZ_SIP_DOMAIN":        "6d0eef93.sip.vobiz.ai",
