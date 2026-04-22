@@ -507,8 +507,8 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
       </div>
       <div>
         <label for="s-v-trunk">LiveKit Trunk ID</label>
-        <input type="text" id="s-v-trunk" placeholder="ST_xxxxxxxxxxxxxxxxxxxx" />
-        <div class="field-note">Run <code>python setup_trunk.py</code> to get this</div>
+        <input type="text" id="s-v-trunk" placeholder="ST_xxxxxxxxxxxxxxxxxxxx" readonly style="background:rgba(255,255,255,0.04);color:var(--muted);" />
+        <div class="field-note">Auto-filled when you click "Create SIP Trunk" below</div>
       </div>
       <div>
         <label for="s-v-transfer">Default Transfer Number</label>
@@ -518,6 +518,7 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
     </div>
     <div class="group-actions">
       <button class="btn btn-green" onclick="saveGroup('vobiz')">💾 Save Vobiz Config</button>
+      <button class="btn" id="btn-create-trunk" onclick="createSipTrunk()" style="background:var(--accent);color:#000;font-weight:700;">⚡ Create SIP Trunk in LiveKit</button>
       <span class="group-save-status" id="gss-vobiz"></span>
     </div>
   </div>
@@ -1018,6 +1019,34 @@ function updateGroupStatuses(data){
   }
 }
 function bool(v){ return v!==undefined && v!==null && v!==''; }
+
+window.createSipTrunk = async function(){
+  const btn = $('btn-create-trunk');
+  const status = $('gss-vobiz');
+  btn.disabled = true;
+  btn.textContent = '⏳ Creating trunk…';
+  status.style.color = 'var(--muted)';
+  status.textContent = 'Registering SIP trunk in LiveKit…';
+  try {
+    const r = await fetch('/api/setup/trunk', {method:'POST'});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || r.statusText);
+    // Fill in the trunk ID field
+    const inp = $('s-v-trunk');
+    if(inp) inp.value = d.trunk_id;
+    status.style.color = 'var(--accent)';
+    status.textContent = `✓ Trunk created: ${d.trunk_id}`;
+    toast(`SIP trunk created and saved: ${d.trunk_id}`);
+    await loadSettings();
+  } catch(e) {
+    status.style.color = '#ff4444';
+    status.textContent = `Error: ${e.message}`;
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Create SIP Trunk in LiveKit';
+  }
+};
 
 window.saveGroup = async function(group){
   const keys = GROUP_KEYS[group];

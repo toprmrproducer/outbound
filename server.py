@@ -125,6 +125,88 @@ async def _error_logging_middleware(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
+# SIP Trunk auto-setup
+# ---------------------------------------------------------------------------
+
+def _lk_session():
+    """Return an aiohttp session with SSL verification disabled (LiveKit compat)."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ctx))
+
+
+async def _lk_client(session):
+    url    = await eff("LIVEKIT_URL")
+    key    = await eff("LIVEKIT_API_KEY")
+    secret = await eff("LIVEKIT_API_SECRET")
+    if not (url and key and secret):
+        raise HTTPException(400, "LiveKit credentials not configured — go to Settings first.")
+    from livekit import api as lk_api_module
+    return lk_api_module.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session), lk_api_module
+
+
+@app.post("/api/setup/trunk")
+async def api_setup_trunk():
+    """
+    Create a LiveKit SIP outbound trunk using saved Vobiz credentials,
+    then save the resulting trunk ID back to settings.
+    Call this once after configuring Vobiz settings.
+    """
+    sip_domain = await eff("VOBIZ_SIP_DOMAIN")
+    username   = await eff("VOBIZ_USERNAME")
+    password   = await eff("VOBIZ_PASSWORD")
+    phone      = await eff("VOBIZ_OUTBOUND_NUMBER")
+
+    if not all([sip_domain, username, password, phone]):
+        raise HTTPException(400, "Vobiz credentials incomplete — set SIP Domain, Username, Password, and Outbound Number first.")
+
+    session = _lk_session()
+    try:
+        lk, lk_api = await _lk_client(session)
+        trunk = await lk.sip.create_sip_outbound_trunk(
+            lk_api.CreateSIPOutboundTrunkRequest(
+                trunk=lk_api.SIPOutboundTrunkInfo(
+                    name="Vobiz Outbound Trunk",
+                    address=sip_domain,
+                    auth_username=username,
+                    auth_password=password,
+                    numbers=[phone],
+                )
+            )
+        )
+        trunk_id = trunk.sip_trunk_id
+        await set_setting("OUTBOUND_TRUNK_ID", trunk_id)
+        logger.info("SIP trunk created: %s", trunk_id)
+        await log_error("server", f"SIP trunk auto-created: {trunk_id}", level="info")
+        return {"status": "created", "trunk_id": trunk_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Trunk setup failed: %s", exc)
+        await log_error("server", f"Trunk setup failed: {exc}", level="error")
+        raise HTTPException(500, str(exc))
+    finally:
+        await session.close()
+
+
+@app.get("/api/setup/trunk")
+async def api_list_trunks():
+    """List existing SIP outbound trunks in this LiveKit project."""
+    session = _lk_session()
+    try:
+        lk, lk_api = await _lk_client(session)
+        trunks = await lk.sip.list_sip_outbound_trunk(lk_api.ListSIPOutboundTrunkRequest())
+        return {"trunks": [{"id": t.sip_trunk_id, "name": t.name, "address": t.address} for t in (trunks.items or [])]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, str(exc))
+    finally:
+        await session.close()
+
+
+# ---------------------------------------------------------------------------
 # Call dispatch
 # ---------------------------------------------------------------------------
 
@@ -145,10 +227,9 @@ async def api_trigger_call(req: CallRequest):
             detail="LiveKit credentials not configured. Go to ⚙️ Settings and add your keys.",
         )
 
+    session = _lk_session()
     try:
-        from livekit import api as lk_api_module
-        import aiohttp
-
+        lk, lk_api = await _lk_client(session)
         room_name = f"call-{req.phone.replace('+', '')}-{random.randint(1000, 9999)}"
 
         effective_prompt = req.system_prompt
@@ -164,25 +245,14 @@ async def api_trigger_call(req: CallRequest):
             "system_prompt": effective_prompt,
         }
 
-        # Create SSL context that doesn't verify certificates (for testing)
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
-        # Create connector with unverified SSL
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
-        session = aiohttp.ClientSession(connector=connector)
-
-        lk = lk_api_module.LiveKitAPI(url=url, api_key=key, api_secret=secret, session=session)
         dispatch = await lk.agent_dispatch.create_dispatch(
-            lk_api_module.CreateAgentDispatchRequest(
+            lk_api.CreateAgentDispatchRequest(
                 agent_name="outbound-caller",
                 room=room_name,
                 metadata=json.dumps(metadata),
             )
         )
         await lk.aclose()
-        await session.close()
 
         return {
             "status": "dispatched",
@@ -191,10 +261,14 @@ async def api_trigger_call(req: CallRequest):
             "phone": req.phone,
         }
 
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Dispatch error: %s", exc)
         await log_error("server", f"Dispatch failed for {req.phone}: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        await session.close()
 
 
 # ---------------------------------------------------------------------------
