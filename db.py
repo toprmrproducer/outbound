@@ -266,18 +266,14 @@ async def get_all_calls(page: int = 1, limit: int = 20) -> list:
 
 async def get_stats() -> dict:
     db = await _adb()
+    rows = (await db.table("call_logs").select("outcome, duration_seconds").execute()).data or []
 
-    total_r  = await db.table("call_logs").select("id", count="exact").execute()
-    booked_r = await db.table("call_logs").select("id", count="exact").eq("outcome", "booked").execute()
-    ni_r     = await db.table("call_logs").select("id", count="exact").eq("outcome", "not_interested").execute()
-    dur_r    = await db.table("call_logs").select("duration_seconds").not_.is_("duration_seconds", "null").execute()
-
-    total_calls   = total_r.count or 0
-    booked        = booked_r.count or 0
-    not_interested = ni_r.count or 0
-    durations     = [r["duration_seconds"] for r in (dur_r.data or []) if r["duration_seconds"]]
-    avg_dur       = sum(durations) / len(durations) if durations else 0
-    booking_rate  = round((booked / total_calls * 100) if total_calls else 0, 1)
+    total_calls    = len(rows)
+    booked         = sum(1 for r in rows if r.get("outcome") == "booked")
+    not_interested = sum(1 for r in rows if r.get("outcome") == "not_interested")
+    durations      = [r["duration_seconds"] for r in rows if r.get("duration_seconds")]
+    avg_dur        = sum(durations) / len(durations) if durations else 0
+    booking_rate   = round((booked / total_calls * 100) if total_calls else 0, 1)
 
     return {
         "total_calls": total_calls,
