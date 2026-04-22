@@ -554,7 +554,7 @@ async def get_all_calls(page: int = 1, limit: int = 20) -> list:
 
 async def get_stats() -> dict:
     db = await _adb()
-    rows = (await db.table("call_logs").select("outcome, duration_seconds").execute()).data or []
+    rows = (await db.table("call_logs").select("outcome, duration_seconds, timestamp").execute()).data or []
 
     total_calls    = len(rows)
     booked         = sum(1 for r in rows if r.get("outcome") == "booked")
@@ -563,10 +563,44 @@ async def get_stats() -> dict:
     avg_dur        = sum(durations) / len(durations) if durations else 0
     booking_rate   = round((booked / total_calls * 100) if total_calls else 0, 1)
 
+    # ── Outcomes breakdown (for donut chart) ──
+    outcomes: dict = {}
+    for r in rows:
+        o = r.get("outcome") or "unknown"
+        outcomes[o] = outcomes.get(o, 0) + 1
+
+    # ── Timeline: calls per day over last 14 days ──
+    from collections import defaultdict
+    daily: dict = defaultdict(int)
+    for r in rows:
+        ts = (r.get("timestamp") or "")[:10]   # YYYY-MM-DD
+        if ts:
+            daily[ts] += 1
+    # Build sorted list of last 14 days
+    today = datetime.now().date()
+    timeline = []
+    for i in range(13, -1, -1):
+        d = (today - timedelta(days=i)).isoformat()
+        timeline.append({"date": d, "count": daily.get(d, 0)})
+
+    # ── Avg duration by outcome ──
+    dur_sum: dict = defaultdict(float)
+    dur_cnt: dict = defaultdict(int)
+    for r in rows:
+        o = r.get("outcome") or "unknown"
+        sec = r.get("duration_seconds")
+        if sec:
+            dur_sum[o] += sec
+            dur_cnt[o] += 1
+    duration_by_outcome = {o: dur_sum[o] / dur_cnt[o] for o in dur_sum}
+
     return {
         "total_calls": total_calls,
         "booked": booked,
         "not_interested": not_interested,
         "avg_duration_seconds": round(avg_dur, 1),
         "booking_rate_percent": booking_rate,
+        "outcomes": outcomes,
+        "timeline": timeline,
+        "duration_by_outcome": duration_by_outcome,
     }

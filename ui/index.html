@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>OutboundAI — Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -99,6 +100,12 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
   color:var(--accent);margin-top:.25rem}
 .not-set-badge{font-size:.68rem;color:var(--muted);margin-top:.25rem}
 .field-note{font-size:.7rem;color:var(--muted);margin-top:.2rem}
+
+/* ── Charts ── */
+.charts-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;margin-top:1rem}
+.chart-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:1.1rem}
+.chart-title{font-size:.7rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:.75rem}
+.chart-wrap{position:relative;height:220px}
 .group-actions{display:flex;gap:.6rem;align-items:center;margin-top:.75rem;flex-wrap:wrap}
 .group-save-status{font-size:.72rem;min-height:1.2em}
 .group-save-status.ok{color:var(--accent)}
@@ -297,6 +304,22 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
       · A typical 2-min call costs ≈ <strong style="color:var(--accent)">₹2.50</strong>
     </div>
   </div>
+
+  <!-- Charts row -->
+  <div class="charts-grid">
+    <div class="chart-card">
+      <div class="chart-title">📊 Call Outcomes</div>
+      <div class="chart-wrap"><canvas id="chart-outcomes"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">📈 Calls Over Time (last 14 days)</div>
+      <div class="chart-wrap"><canvas id="chart-timeline"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">⏱ Avg Duration by Outcome</div>
+      <div class="chart-wrap"><canvas id="chart-duration"></canvas></div>
+    </div>
+  </div>
 </div>
 
 <!-- ══ SINGLE CALL ══ -->
@@ -351,6 +374,12 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
     <div class="per-call-prompt" id="bc-area">
       <label for="bc-prompt">Batch Custom Prompt</label>
       <textarea id="bc-prompt" rows="5" placeholder="You are Priya from {business_name}..."></textarea>
+    </div>
+    <div style="margin:.75rem 0">
+      <label for="bc-agent-profile">Agent Profile</label>
+      <select id="bc-agent-profile" style="max-width:320px">
+        <option value="">— Use Global Default —</option>
+      </select>
     </div>
     <hr class="divider" />
     <div style="display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap;margin-bottom:.75rem">
@@ -562,13 +591,41 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
       <div>
         <label for="agent-voice">Voice</label>
         <select id="agent-voice">
-          <option value="Aoede">Aoede — warm female (default)</option>
-          <option value="Fenrir">Fenrir — confident male</option>
-          <option value="Puck">Puck — bright, energetic</option>
-          <option value="Charon">Charon — deep, calm male</option>
-          <option value="Kore">Kore — soft female</option>
-          <option value="Orbit">Orbit — clear, professional</option>
-          <option value="Zephyr">Zephyr — light male</option>
+          <optgroup label="Female voices">
+            <option value="Aoede">Aoede — warm, expressive ⭐</option>
+            <option value="Achernar">Achernar — soft &amp; clear</option>
+            <option value="Autonoe">Autonoe — natural female</option>
+            <option value="Callirrhoe">Callirrhoe — gentle female</option>
+            <option value="Despina">Despina — bright female</option>
+            <option value="Erinome">Erinome — smooth female</option>
+            <option value="Gacrux">Gacrux — rich female</option>
+            <option value="Kore">Kore — soft, calm</option>
+            <option value="Laomedeia">Laomedeia — light female</option>
+            <option value="Leda">Leda — clear female</option>
+            <option value="Pulcherrima">Pulcherrima — warm female</option>
+            <option value="Sulafat">Sulafat — smooth female</option>
+            <option value="Vindemiatrix">Vindemiatrix — professional female</option>
+            <option value="Zephyr">Zephyr — airy female</option>
+          </optgroup>
+          <optgroup label="Male voices">
+            <option value="Achird">Achird — clear male</option>
+            <option value="Algenib">Algenib — strong male</option>
+            <option value="Algieba">Algieba — rich male</option>
+            <option value="Alnilam">Alnilam — deep male</option>
+            <option value="Charon">Charon — calm, deep</option>
+            <option value="Enceladus">Enceladus — expressive male</option>
+            <option value="Fenrir">Fenrir — confident male</option>
+            <option value="Iapetus">Iapetus — steady male</option>
+            <option value="Orus">Orus — warm male</option>
+            <option value="Perseus">Perseus — clear male</option>
+            <option value="Puck">Puck — bright, energetic</option>
+            <option value="Rasalgethi">Rasalgethi — bold male</option>
+            <option value="Sadachbia">Sadachbia — natural male</option>
+            <option value="Sadaltager">Sadaltager — smooth male</option>
+            <option value="Schedar">Schedar — professional male</option>
+            <option value="Umbriel">Umbriel — deep, calm</option>
+            <option value="Zubenelgenubi">Zubenelgenubi — resonant male</option>
+          </optgroup>
         </select>
       </div>
       <div>
@@ -704,13 +761,41 @@ tr.detail-row td{background:#111;font-family:var(--mono);font-size:.73rem;color:
       <div>
         <label for="s-g-voice">TTS Voice</label>
         <select id="s-g-voice">
-          <option value="Aoede">Aoede — warm female (default)</option>
-          <option value="Puck">Puck — bright, energetic</option>
-          <option value="Charon">Charon — deep, calm</option>
-          <option value="Kore">Kore — soft female</option>
-          <option value="Fenrir">Fenrir — confident male</option>
-          <option value="Orbit">Orbit — clear, professional</option>
-          <option value="Zephyr">Zephyr — light male</option>
+          <optgroup label="Female voices">
+            <option value="Aoede">Aoede — warm, expressive ⭐</option>
+            <option value="Achernar">Achernar — soft &amp; clear</option>
+            <option value="Autonoe">Autonoe — natural female</option>
+            <option value="Callirrhoe">Callirrhoe — gentle female</option>
+            <option value="Despina">Despina — bright female</option>
+            <option value="Erinome">Erinome — smooth female</option>
+            <option value="Gacrux">Gacrux — rich female</option>
+            <option value="Kore">Kore — soft, calm</option>
+            <option value="Laomedeia">Laomedeia — light female</option>
+            <option value="Leda">Leda — clear female</option>
+            <option value="Pulcherrima">Pulcherrima — warm female</option>
+            <option value="Sulafat">Sulafat — smooth female</option>
+            <option value="Vindemiatrix">Vindemiatrix — professional female</option>
+            <option value="Zephyr">Zephyr — airy female</option>
+          </optgroup>
+          <optgroup label="Male voices">
+            <option value="Achird">Achird — clear male</option>
+            <option value="Algenib">Algenib — strong male</option>
+            <option value="Algieba">Algieba — rich male</option>
+            <option value="Alnilam">Alnilam — deep male</option>
+            <option value="Charon">Charon — calm, deep</option>
+            <option value="Enceladus">Enceladus — expressive male</option>
+            <option value="Fenrir">Fenrir — confident male</option>
+            <option value="Iapetus">Iapetus — steady male</option>
+            <option value="Orus">Orus — warm male</option>
+            <option value="Perseus">Perseus — clear male</option>
+            <option value="Puck">Puck — bright, energetic</option>
+            <option value="Rasalgethi">Rasalgethi — bold male</option>
+            <option value="Sadachbia">Sadachbia — natural male</option>
+            <option value="Sadaltager">Sadaltager — smooth male</option>
+            <option value="Schedar">Schedar — professional male</option>
+            <option value="Umbriel">Umbriel — deep, calm</option>
+            <option value="Zubenelgenubi">Zubenelgenubi — resonant male</option>
+          </optgroup>
         </select>
       </div>
     </div>
@@ -1085,8 +1170,28 @@ window.toggleEye = function(id, btn){
 }
 
 // ══════════════════════════════════════════════════════
-// Stats
+// Stats + Charts
 // ══════════════════════════════════════════════════════
+const _charts = {};
+
+function _mkChart(id, type, data, options={}){
+  const canvas = document.getElementById(id);
+  if(!canvas) return;
+  if(_charts[id]) _charts[id].destroy();
+  _charts[id] = new Chart(canvas, {
+    type, data,
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ legend:{ labels:{ color:'#aaa', font:{size:11} } } },
+      scales: type==='bar'||type==='line' ? {
+        x:{ ticks:{color:'#5a5a5a',font:{size:10}}, grid:{color:'#1e1e1e'} },
+        y:{ ticks:{color:'#5a5a5a',font:{size:10}}, grid:{color:'#1e1e1e'}, beginAtZero:true }
+      } : {},
+      ...options
+    }
+  });
+}
+
 async function loadStats(){
   try{
     const d = await api('/api/stats');
@@ -1095,8 +1200,45 @@ async function loadStats(){
     $('s-ni').textContent     = d.not_interested??0;
     $('s-rate').textContent   = (d.booking_rate_percent??0)+'%';
     $('s-dur').textContent    = d.avg_duration_seconds??0;
+    _renderCharts(d);
   }catch(e){}
   await loadLiveConfig();
+}
+
+function _renderCharts(d){
+  // 1. Outcomes donut
+  const outcomes = d.outcomes || {};
+  const outLabels = Object.keys(outcomes).length ? Object.keys(outcomes) : ['booked','not_interested','no_answer','other'];
+  const outVals   = outLabels.map(k=>outcomes[k]||0);
+  const palette   = ['#00ff88','#ff4d4d','#ffaa00','#00ccff','#cc88ff','#ff88cc'];
+  _mkChart('chart-outcomes','doughnut',{
+    labels: outLabels.map(l=>l.replace(/_/g,' ')),
+    datasets:[{ data:outVals, backgroundColor:palette, borderWidth:0, hoverOffset:6 }]
+  },{ plugins:{ legend:{ position:'right', labels:{color:'#aaa',font:{size:10}, boxWidth:12} } } });
+
+  // 2. Timeline line chart
+  const tl = d.timeline || [];
+  _mkChart('chart-timeline','line',{
+    labels: tl.map(p=>p.date||''),
+    datasets:[{
+      label:'Calls',
+      data: tl.map(p=>p.count||0),
+      borderColor:'#00ccff', backgroundColor:'#00ccff18',
+      fill:true, tension:.4, pointRadius:3, pointBackgroundColor:'#00ccff'
+    }]
+  });
+
+  // 3. Avg duration by outcome bar
+  const dur = d.duration_by_outcome || {};
+  const durLabels = Object.keys(dur).length ? Object.keys(dur) : [];
+  _mkChart('chart-duration','bar',{
+    labels: durLabels.map(l=>l.replace(/_/g,' ')),
+    datasets:[{
+      label:'Avg seconds',
+      data: durLabels.map(k=>Math.round(dur[k]||0)),
+      backgroundColor:'#00ff8866', borderColor:'#00ff88', borderWidth:1, borderRadius:4
+    }]
+  });
 }
 
 async function loadLiveConfig(){
@@ -1185,6 +1327,7 @@ $('bc-start').addEventListener('click', async () => {
   if(!batchRows.length) return;
   const delay = Math.max(1,parseInt($('bc-delay').value)||3)*1000;
   const bPrompt = $('bc-chk').checked ? $('bc-prompt').value.trim() : null;
+  const bProfile = $('bc-agent-profile').value || null;
   const btn=$('bc-start'), wrap=$('bc-pw'), bar=$('bc-pb'), lbl=$('bc-pl');
   btn.disabled=true; $('bc-parse').disabled=true;
   wrap.style.display='block'; lbl.style.display='block';
@@ -1193,7 +1336,7 @@ $('bc-start').addEventListener('click', async () => {
     const row=batchRows[i];
     bar.style.width=Math.round(((i+1)/batchRows.length)*100)+'%';
     lbl.textContent=`Dispatching ${i+1}/${batchRows.length} → ${row.phone}`;
-    try{ const r=await apiPost('/api/call',{...row,system_prompt:bPrompt||null}); if(r.ok)ok++;else fail++ }
+    try{ const r=await apiPost('/api/call',{...row,system_prompt:bPrompt||null,agent_profile_id:bProfile}); if(r.ok)ok++;else fail++ }
     catch(_){fail++}
     if(i<batchRows.length-1) await new Promise(res=>setTimeout(res,delay));
   }
@@ -1939,7 +2082,7 @@ async function loadAgentProfiles(){
 }
 
 function _populateProfileDropdowns(profiles){
-  ['f-agent-profile','camp-agent-profile'].forEach(id=>{
+  ['f-agent-profile','bc-agent-profile','camp-agent-profile'].forEach(id=>{
     const sel=document.getElementById(id);
     if(!sel) return;
     const cur=sel.value;
