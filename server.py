@@ -771,6 +771,19 @@ async def api_create_agent_profile(req: AgentProfileRequest):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@app.get("/api/agent-profiles/{profile_id}")
+async def api_get_agent_profile(profile_id: str):
+    try:
+        profile = await get_agent_profile(profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        return profile
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @app.put("/api/agent-profiles/{profile_id}")
 async def api_update_agent_profile(profile_id: str, req: AgentProfileRequest):
     try:

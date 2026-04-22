@@ -1909,7 +1909,12 @@ let _agentEditId = null;
 
 async function loadAgentProfiles(){
   try{
-    const profiles = await api('/api/agent-profiles');
+    const raw = await api('/api/agent-profiles');
+    // Guard: server may return {detail:"..."} if table doesn't exist yet
+    const profiles = Array.isArray(raw) ? raw : [];
+    if(!Array.isArray(raw) && raw && raw.detail){
+      console.warn('Agent profiles API error:', raw.detail);
+    }
     const tbody = $('agents-tbody');
     if(!profiles.length){
       tbody.innerHTML='<tr><td colspan="6" class="empty">No agent profiles yet — create one above.</td></tr>';
