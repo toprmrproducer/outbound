@@ -3,8 +3,38 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+# ---------------------------------------------------------------------------
+# Hardcoded defaults — used as last-resort fallback when neither Supabase
+# settings nor environment variables are configured by the user.
+# Users override these via the Settings tab (stored in Supabase).
+# ---------------------------------------------------------------------------
+DEFAULTS = {
+    "LIVEKIT_URL":             "wss://abc-dtz1tiod.livekit.cloud",
+    "LIVEKIT_API_KEY":         "API4MSqHSSyiVdh",
+    "LIVEKIT_API_SECRET":      "pG6TNGyYfi2djbRgxo8g1fky7DoI2C5w8nHSUFqxRjg",
+    "GOOGLE_API_KEY":          "AIzaSyB9jUcS1xhEykGj9P3pGLndxHP3zyW-VOw",
+    "GEMINI_MODEL":            "gemini-2.0-flash-live-001",
+    "GEMINI_TTS_VOICE":        "Aoede",
+    "USE_GEMINI_REALTIME":     "true",
+    "VOBIZ_SIP_DOMAIN":        "6d0eef93.sip.vobiz.ai",
+    "VOBIZ_USERNAME":          "abc@12345",
+    "VOBIZ_PASSWORD":          "abc@12345",
+    "VOBIZ_OUTBOUND_NUMBER":   "+918071387394",
+    "OUTBOUND_TRUNK_ID":       "6d0eef93-78f0-4ed4-8dcd-a87c9e6c6613",
+    "DEFAULT_TRANSFER_NUMBER": "+918071387394",
+    "SUPABASE_URL":            "https://iocllooszyeeysfyxbfq.supabase.co",
+    "SUPABASE_SERVICE_KEY":    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlvY2xsb29zenllZXlzZnl4YmZxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Njc5MjAzNiwiZXhwIjoyMDkyMzY4MDM2fQ.RERrvk0ZXEeqezxsPhXwtdtD_r-J-e2uR1Qb7SA4lPY",
+    "DEEPGRAM_API_KEY":        "85e05deac6b575d89f80ad25fc7a2b662e52f14f",
+}
+
+
+def _default(key: str) -> str:
+    """Return env var → hardcoded default (in that priority order)."""
+    return os.getenv(key, DEFAULTS.get(key, ""))
+
+
+SUPABASE_URL = _default("SUPABASE_URL")
+SUPABASE_KEY = _default("SUPABASE_SERVICE_KEY")
 
 SENSITIVE_KEYS = {
     "LIVEKIT_API_KEY",
@@ -19,17 +49,13 @@ SENSITIVE_KEYS = {
 def _sdb():
     """Synchronous Supabase client — used only at agent startup."""
     from supabase import create_client
-    url = os.getenv("SUPABASE_URL", SUPABASE_URL)
-    key = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
-    return create_client(url, key)
+    return create_client(_default("SUPABASE_URL"), _default("SUPABASE_SERVICE_KEY"))
 
 
 async def _adb():
     """Async Supabase client — used for all server/agent async operations."""
     from supabase._async.client import create_client
-    url = os.getenv("SUPABASE_URL", SUPABASE_URL)
-    key = os.getenv("SUPABASE_SERVICE_KEY", SUPABASE_KEY)
-    return await create_client(url, key)
+    return await create_client(_default("SUPABASE_URL"), _default("SUPABASE_SERVICE_KEY"))
 
 
 def init_db() -> None:
@@ -64,7 +90,7 @@ async def get_all_settings() -> dict:
     ]
     out: dict = {}
     for k in KNOWN_KEYS:
-        env_val = os.getenv(k, "")
+        env_val = _default(k)
         if k in SENSITIVE_KEYS:
             out[k] = {"value": "", "configured": bool(env_val)}
         else:
@@ -99,7 +125,7 @@ async def get_setting(key: str, default: str = "") -> str:
     result = await db.table("settings").select("value").eq("key", key).maybe_single().execute()
     if result and result.data:
         return result.data["value"]
-    return default
+    return _default(key) or default
 
 
 async def set_setting(key: str, value: str) -> None:
