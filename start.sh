@@ -25,12 +25,11 @@ echo "📋 Configuration:"
 echo "   LiveKit: ${LIVEKIT_URL}"
 echo "   Gemini: ${GEMINI_MODEL:-gemini-2.0-flash-live-001}"
 echo "   Supabase: ${SUPABASE_URL}"
-echo "   Port: ${PORT:-8000}"
 echo ""
 
-# Start FastAPI server in background
-echo "🌐 Starting FastAPI server on port ${PORT:-8000}..."
-uvicorn server:app --host 0.0.0.0 --port "${PORT:-8000}" &
+# Always use port 8000 for FastAPI — LiveKit agent reserves 8081 for its own HTTP server
+echo "🌐 Starting FastAPI server on port 8000..."
+uvicorn server:app --host 0.0.0.0 --port 8000 &
 SERVER_PID=$!
 
 # Give server time to start
