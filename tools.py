@@ -33,13 +33,7 @@ class AppointmentTools(llm.ToolContext):
         self.lead_name = lead_name
         self._call_start_time = time.time()
         self._sip_domain = os.getenv("VOBIZ_SIP_DOMAIN", "")
-        super().__init__(tools=[
-            self.check_availability,
-            self.book_appointment,
-            self.end_call,
-            self.transfer_to_human,
-            self.send_sms_confirmation,
-        ])
+        super().__init__(tools=[])
 
     @property
     def all_tools(self) -> list:
