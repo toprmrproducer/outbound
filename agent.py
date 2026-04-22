@@ -49,8 +49,13 @@ def _certifi_create_default_context(purpose=ssl.Purpose.SERVER_AUTH, **kwargs):
 
 ssl.create_default_context = _certifi_create_default_context
 
-from livekit import agents, api
+from livekit import agents, api, rtc
 from livekit.agents import Agent, AgentSession, RoomInputOptions
+try:
+    from livekit.agents import RoomOptions as _RoomOptions
+    _HAS_ROOM_OPTIONS = True
+except ImportError:
+    _HAS_ROOM_OPTIONS = False
 from livekit.plugins import noise_cancellation, silero
 
 from db import init_db, log_error, get_enabled_tools
@@ -366,14 +371,33 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
     session = _build_session(tools=active_tools, system_prompt=system_prompt)
 
-    await session.start(
-        room=ctx.room,
-        agent=OutboundAssistant(instructions=system_prompt),
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVCTelephony(),
-            close_on_disconnect=True,
-        ),
-    )
+    # Build session start kwargs using RoomOptions if available (non-deprecated),
+    # otherwise fall back to the old RoomInputOptions.
+    # IMPORTANT: do NOT use close_on_disconnect=True — SIP legs frequently have
+    # brief audio dropouts that look like disconnects. We handle shutdown ourselves
+    # by watching for the SIP participant actually leaving the room.
+    if _HAS_ROOM_OPTIONS:
+        from livekit.agents import RoomOptions as _RO
+        _session_kwargs = dict(
+            room=ctx.room,
+            agent=OutboundAssistant(instructions=system_prompt),
+            room_options=_RO(
+                input_options=RoomInputOptions(
+                    noise_cancellation=noise_cancellation.BVCTelephony(),
+                ),
+            ),
+        )
+    else:
+        _session_kwargs = dict(
+            room=ctx.room,
+            agent=OutboundAssistant(instructions=system_prompt),
+            room_input_options=RoomInputOptions(
+                noise_cancellation=noise_cancellation.BVCTelephony(),
+                # close_on_disconnect intentionally omitted — see note above
+            ),
+        )
+
+    await session.start(**_session_kwargs)
     await _log("info", "Agent session started — AI ready, generating greeting")
 
     # ------------------------------------------------------------------
@@ -422,10 +446,9 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # For other models, generate_reply() triggers the opening line.
     # ------------------------------------------------------------------
     _active_model = os.getenv("GEMINI_MODEL", "")
-    if "3.1" in _active_model:
-        # 3.1 model auto-speaks from system prompt — no trigger needed.
-        # generate_reply() would log a noisy ERROR and do nothing.
-        await _log("info", "Gemini 3.1: model will greet autonomously from system prompt")
+    if "3.1" in _active_model or "2.5" in _active_model:
+        # 3.1 / 2.5 native-audio models auto-speak from system prompt.
+        await _log("info", "Gemini native-audio: model will greet autonomously from system prompt")
     else:
         greeting_instructions = (
             f"The call just connected. Greet the lead and ask if you're speaking "
@@ -437,6 +460,52 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             await session.generate_reply(instructions=greeting_instructions)
         except Exception as _gr_exc:
             await _log("warning", f"generate_reply failed: {_gr_exc}")
+
+    # ------------------------------------------------------------------
+    # Keep session alive until the SIP participant actually leaves.
+    # This is critical — without this block, the entrypoint can return
+    # before the call ends, causing the process to spin down prematurely.
+    # We watch the room for the SIP participant disconnecting, then give
+    # a short grace period (re-connection window) before shutting down.
+    # ------------------------------------------------------------------
+    import asyncio
+
+    if phone_number:
+        _sip_identity = f"sip_{phone_number}"
+        _disconnect_event = asyncio.Event()
+
+        def _on_participant_disconnected(participant: rtc.RemoteParticipant):
+            if participant.identity == _sip_identity:
+                _disconnect_event.set()
+
+        ctx.room.on("participant_disconnected", _on_participant_disconnected)
+
+        # Also watch for the room itself closing (e.g. LiveKit server timeout)
+        def _on_disconnected():
+            _disconnect_event.set()
+        ctx.room.on("disconnected", _on_disconnected)
+
+        # Wait until the SIP leg genuinely drops
+        try:
+            await asyncio.wait_for(_disconnect_event.wait(), timeout=3600)  # max 1h
+        except asyncio.TimeoutError:
+            await _log("warning", "Call reached 1-hour safety timeout — shutting down")
+
+        await _log("info", f"SIP participant disconnected — ending session for {phone_number}")
+        await session.aclose()
+    else:
+        # Inbound / test call — just wait for the session to finish naturally
+        import asyncio
+        _done = asyncio.Event()
+
+        def _on_room_disconnected():
+            _done.set()
+        ctx.room.on("disconnected", _on_room_disconnected)
+
+        try:
+            await asyncio.wait_for(_done.wait(), timeout=3600)
+        except asyncio.TimeoutError:
+            pass
 
 
 # ---------------------------------------------------------------------------
