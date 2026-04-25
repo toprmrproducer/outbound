@@ -371,6 +371,17 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
     session = _build_session(tools=active_tools, system_prompt=system_prompt)
 
+    # Noise cancellation: ON by default using BVCTelephony (LiveKit's
+    # SIP-tuned profile). Disable only for debugging:
+    #   ENABLE_NOISE_CANCELLATION=false
+    # If you suspect BVC is over-attenuating speech on a specific carrier,
+    # disable it temporarily and compare audio quality.
+    _enable_nc = os.getenv("ENABLE_NOISE_CANCELLATION", "true").lower() != "false"
+    _input_opts = RoomInputOptions(
+        noise_cancellation=noise_cancellation.BVCTelephony() if _enable_nc else None,
+    )
+    await _log("info", f"Noise cancellation: {'ON (BVCTelephony)' if _enable_nc else 'OFF'}")
+
     # Build session start kwargs using RoomOptions if available (non-deprecated),
     # otherwise fall back to the old RoomInputOptions.
     # IMPORTANT: do NOT use close_on_disconnect=True — SIP legs frequently have
@@ -382,19 +393,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             room=ctx.room,
             agent=OutboundAssistant(instructions=system_prompt),
             room_options=_RO(
-                input_options=RoomInputOptions(
-                    noise_cancellation=noise_cancellation.BVCTelephony(),
-                ),
+                input_options=_input_opts,
             ),
         )
     else:
         _session_kwargs = dict(
             room=ctx.room,
             agent=OutboundAssistant(instructions=system_prompt),
-            room_input_options=RoomInputOptions(
-                noise_cancellation=noise_cancellation.BVCTelephony(),
-                # close_on_disconnect intentionally omitted — see note above
-            ),
+            room_input_options=_input_opts,
         )
 
     await session.start(**_session_kwargs)
@@ -472,6 +478,7 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # a short grace period (re-connection window) before shutting down.
     # ------------------------------------------------------------------
     import asyncio
+    import time
 
     if phone_number:
         _sip_identity = f"sip_{phone_number}"
@@ -488,11 +495,63 @@ async def entrypoint(ctx: agents.JobContext) -> None:
             _disconnect_event.set()
         ctx.room.on("disconnected", _on_disconnected)
 
+        # ── Inactivity observability watchdog ──────────────────────────────
+        # Passive monitor: tracks the last time either side spoke and emits
+        # WARNING-level logs when silence exceeds 20 s and 40 s thresholds.
+        # We deliberately do NOT call session.generate_reply() here — it is
+        # explicitly blocked by livekit-plugins-google for 3.1 / 2.5 native-
+        # audio models (see plugin warning: "limited mid-session update
+        # support"), so any nudge would silently no-op while papering over
+        # the real problem in production.
+        # Instead, we surface the silence as a structured warning so it shows
+        # up in /api/logs and you can correlate with carrier / network events.
+        _last_speech = [time.time()]
+        _warned_thresholds: set = set()
+
+        def _on_any_speech(*_args):
+            _last_speech[0] = time.time()
+            _warned_thresholds.clear()
+
+        for _ev in ("agent_started_speaking", "user_started_speaking",
+                    "agent_speech_committed", "user_speech_committed"):
+            try:
+                session.on(_ev, _on_any_speech)
+            except Exception:
+                pass  # event names differ by plugin version — not fatal
+
+        async def _silence_watchdog():
+            # Grace period — let the greeting + initial response finish first
+            await asyncio.sleep(20)
+            while not _disconnect_event.is_set():
+                try:
+                    await asyncio.wait_for(_disconnect_event.wait(), timeout=5)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                silence_sec = time.time() - _last_speech[0]
+                # Two-tier alerting so a single call doesn't spam logs
+                for threshold in (20, 40):
+                    if silence_sec >= threshold and threshold not in _warned_thresholds:
+                        _warned_thresholds.add(threshold)
+                        await _log(
+                            "warning",
+                            f"Silence watchdog: {silence_sec:.0f}s without speech",
+                            f"phone={phone_number} room={ctx.room.name} model={os.getenv('GEMINI_MODEL', '')}",
+                        )
+
+        _watchdog_task = asyncio.create_task(_silence_watchdog())
+
         # Wait until the SIP leg genuinely drops
         try:
             await asyncio.wait_for(_disconnect_event.wait(), timeout=3600)  # max 1h
         except asyncio.TimeoutError:
             await _log("warning", "Call reached 1-hour safety timeout — shutting down")
+        finally:
+            _watchdog_task.cancel()
+            try:
+                await _watchdog_task
+            except asyncio.CancelledError:
+                pass
 
         await _log("info", f"SIP participant disconnected — ending session for {phone_number}")
         await session.aclose()
