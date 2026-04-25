@@ -404,9 +404,12 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     # Optional egress recording (only if S3 configured)
     # ------------------------------------------------------------------
     if phone_number:
-        _aws_key    = os.getenv("AWS_ACCESS_KEY_ID", "")
-        _aws_secret = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-        _aws_bucket = os.getenv("AWS_BUCKET_NAME", "")
+        # Support both S3_ prefix (Supabase Storage convention) and AWS_ prefix
+        _aws_key    = os.getenv("S3_ACCESS_KEY_ID") or os.getenv("AWS_ACCESS_KEY_ID", "")
+        _aws_secret = os.getenv("S3_SECRET_ACCESS_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY", "")
+        _aws_bucket = os.getenv("S3_BUCKET") or os.getenv("AWS_BUCKET_NAME", "")
+        _s3_endpoint = os.getenv("S3_ENDPOINT_URL") or os.getenv("S3_ENDPOINT", "")
+        _s3_region  = os.getenv("S3_REGION") or os.getenv("AWS_REGION", "ap-northeast-1")
         if _aws_key and _aws_secret and _aws_bucket:
             try:
                 _recording_path = f"recordings/{ctx.room.name}.ogg"
@@ -421,14 +424,14 @@ async def entrypoint(ctx: agents.JobContext) -> None:
                                 access_key=_aws_key,
                                 secret=_aws_secret,
                                 bucket=_aws_bucket,
-                                region=os.getenv("AWS_REGION", "us-east-1"),
-                                endpoint=os.getenv("S3_ENDPOINT", ""),
+                                region=_s3_region,
+                                endpoint=_s3_endpoint,
                             ),
                         )
                     ],
                 )
                 _egress = await ctx.api.egress.start_room_composite_egress(_egress_req)
-                _s3_ep = os.getenv("S3_ENDPOINT", "").rstrip("/")
+                _s3_ep = _s3_endpoint.rstrip("/")
                 tool_ctx.recording_url = (
                     f"{_s3_ep}/{_aws_bucket}/{_recording_path}"
                     if _s3_ep
