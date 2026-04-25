@@ -371,12 +371,11 @@ async def entrypoint(ctx: agents.JobContext) -> None:
     await _log("info", f"Tools loaded: {[t.__name__ for t in active_tools]}")
     session = _build_session(tools=active_tools, system_prompt=system_prompt)
 
-    # Noise cancellation: ON by default using BVCTelephony (LiveKit's
-    # SIP-tuned profile). Disable only for debugging:
-    #   ENABLE_NOISE_CANCELLATION=false
-    # If you suspect BVC is over-attenuating speech on a specific carrier,
-    # disable it temporarily and compare audio quality.
-    _enable_nc = os.getenv("ENABLE_NOISE_CANCELLATION", "true").lower() != "false"
+    # Noise cancellation: OFF by default for SIP/Vobiz calls.
+    # Vobiz PSTN already processes audio; BVCTelephony on top filters
+    # the lead's voice as "noise" → Gemini hears silence → call goes quiet.
+    # Set ENABLE_NOISE_CANCELLATION=true only for raw mic/browser testing.
+    _enable_nc = os.getenv("ENABLE_NOISE_CANCELLATION", "false").lower() == "true"
     _input_opts = RoomInputOptions(
         noise_cancellation=noise_cancellation.BVCTelephony() if _enable_nc else None,
     )
